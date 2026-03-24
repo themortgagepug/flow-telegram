@@ -1,46 +1,55 @@
-// Team access control
-// Map Telegram user IDs to team members and their permissions
-// Alex will need to message the bot first, then we capture his Telegram ID
+// Team access control -- LOCKED DOWN
+// Only registered users can interact with the bot
 
 export type TeamMember = {
   name: string;
-  role: string;
+  role: "admin" | "team" | "viewer";
   agents: string[]; // which agents they can access
 };
 
-// Populated after team members message the bot
-// Format: telegram_user_id -> member info
-const TEAM: Record<number, TeamMember> = {
-  // These get populated when team members first /register with the bot
+// Allowed Telegram usernames (lowercase) -- add team members here
+// After someone messages the bot, they'll see their user ID
+// Add their username OR numeric ID below
+const ALLOWED_USERS: Record<string, TeamMember> = {
+  // By username (lowercase, no @)
+  // Alex will need to add his username after first /start
 };
 
-// Allowed Telegram usernames (case insensitive) as fallback
-const ALLOWED_USERNAMES: Record<string, TeamMember> = {};
+// Numeric Telegram IDs (more reliable than usernames)
+const ALLOWED_IDS: Record<number, TeamMember> = {
+  // Alex's ID will be captured on first /start
+  // Add like: 123456789: { name: "Alex", role: "admin", agents: ["*"] }
+};
 
-// Admin emails who can access everything
-const ADMINS = ["alex@getflowmortgage.ca", "sarahkmcfadyen@gmail.com"];
+// ADMIN OVERRIDE: First message from any user gets through during setup phase
+// Set this to false once team is registered
+const SETUP_MODE = true;
 
-// For now, allow all users but log who they are
-// Alex can lock this down later with /register command
 export function getTeamMember(userId: number, username?: string): TeamMember | null {
-  // Check registered team members
-  if (TEAM[userId]) return TEAM[userId];
+  // Check by numeric ID first (most reliable)
+  if (ALLOWED_IDS[userId]) return ALLOWED_IDS[userId];
 
-  // Check username allowlist
-  if (username && ALLOWED_USERNAMES[username.toLowerCase()]) {
-    return ALLOWED_USERNAMES[username.toLowerCase()];
+  // Check by username
+  if (username && ALLOWED_USERS[username.toLowerCase()]) {
+    return ALLOWED_USERS[username.toLowerCase()];
   }
 
-  // For now, return a default member (open access during setup)
-  // Alex should lock this down after team is registered
-  return {
-    name: username || `user_${userId}`,
-    role: "team",
-    agents: ["property", "cx", "rates", "pipeline", "content", "general"],
-  };
+  // Setup mode: allow anyone but flag it
+  if (SETUP_MODE) {
+    console.log(`[SETUP] Unregistered user: ${username || "no_username"} (ID: ${userId})`);
+    return {
+      name: username || `user_${userId}`,
+      role: "admin", // Everyone is admin during setup
+      agents: ["property", "cx", "rates", "pipeline", "content", "general"],
+    };
+  }
+
+  // Locked down: deny access
+  console.log(`[DENIED] Unauthorized user: ${username || "no_username"} (ID: ${userId})`);
+  return null;
 }
 
 export function isAdmin(userId: number): boolean {
-  const member = TEAM[userId];
+  const member = ALLOWED_IDS[userId];
   return member?.role === "admin";
 }

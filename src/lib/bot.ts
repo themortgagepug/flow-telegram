@@ -10,6 +10,7 @@ import {
 } from "./agents";
 import { TOOLS } from "./tools";
 import { handleToolCall } from "./tool-handlers";
+import { getHistory, addToHistory } from "./memory";
 
 function getAnthropicClient() {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -115,20 +116,37 @@ export async function handleMessage(message: TelegramMessage, token: string) {
     console.error("Context fetch error:", e);
   }
 
-  // Call Claude with tools
+  // Call Claude with tools + conversation memory
   try {
     const anthropic = getAnthropicClient();
+
+    // Build messages with conversation history
+    const history = await getHistory(userId);
+    const historyMessages = history.map(h => ({ role: h.role, content: h.content }));
+
+    // Add current message
+    const messages: Array<Record<string, unknown>> = [
+      ...historyMessages,
+      { role: "user", content: messageContent },
+    ];
+
+    // Save user message to history
+    const userText = typeof messageContent === "string" ? messageContent : text;
+    await addToHistory(userId, "user", userText);
+
+    // Send typing indicator periodically
+    const typingInterval = setInterval(() => sendTypingAction(token, chatId), 4000);
+
     let response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 2048,
       system: getSystemPrompt(agent) + "\n\nCONTEXT DATA:\n" + context,
       tools: TOOLS,
-      messages: [{ role: "user", content: messageContent }],
+      messages,
     });
 
     // Handle tool use loop (up to 5 iterations)
     let iterations = 0;
-    const messages: Array<Record<string, unknown>> = [{ role: "user", content: messageContent }];
 
     while (iterations < 5) {
       // Check if Claude wants to use a tool
@@ -169,16 +187,28 @@ export async function handleMessage(message: TelegramMessage, token: string) {
       iterations++;
     }
 
+    clearInterval(typingInterval);
+
     // Extract final text response
     const textBlocks = response.content.filter((c: Record<string, unknown>) => c.type === "text");
     const reply = textBlocks.length > 0
       ? textBlocks.map((c: Record<string, unknown>) => c.text).join("\n")
       : "Done.";
 
+    // Save assistant response to history
+    await addToHistory(userId, "assistant", reply);
+
     await sendMessage(token, chatId, reply);
   } catch (error) {
     console.error("Claude error:", error);
-    await sendMessage(token, chatId, "Error processing your request. Try again in a moment.");
+    const errMsg = error instanceof Error ? error.message : "Unknown error";
+    if (errMsg.includes("rate_limit")) {
+      await sendMessage(token, chatId, "Rate limited. Wait a moment and try again.");
+    } else if (errMsg.includes("overloaded")) {
+      await sendMessage(token, chatId, "AI is busy. Try again in 30 seconds.");
+    } else {
+      await sendMessage(token, chatId, "Something went wrong. Try again or rephrase your request.");
+    }
   }
 }
 
