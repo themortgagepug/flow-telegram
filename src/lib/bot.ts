@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { sendMessage, sendTypingAction } from "./telegram";
 import { getTeamMember } from "./team";
 import {
@@ -10,7 +9,11 @@ import {
   getSystemPrompt,
 } from "./agents";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+function getAnthropicClient() {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Anthropic = require("@anthropic-ai/sdk").default;
+  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+}
 
 type TelegramMessage = {
   message_id: number;
@@ -146,6 +149,7 @@ Or just ask me anything -- I'll figure out the right agent.`
 
   // Call Claude
   try {
+    const anthropic = getAnthropicClient();
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
