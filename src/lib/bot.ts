@@ -261,28 +261,28 @@ async function handleCommand(text: string, message: TelegramMessage, token: stri
   switch (command) {
     case "/start":
       await sendMessage(token, chatId,
-        `Welcome to Flow Agent, ${message.from.first_name}!
+        `Hey ${message.from.first_name}. Flow Agent is live.
 
-I'm your AI Chief of Staff. I can:
+What I do best:
 
-- Create leads from screenshots
-- Send emails & draft letters
-- Manage your 4 properties
-- Query deals & CRM
-- Generate pre-approval letters
-- Track rates & renewals
-- Log expenses & transactions
+NEW LEAD -- screenshot, forward, or type lead info. I create the contact, mortgage, and task Amy to reach out. All in Zoho.
 
-Commands:
-/lead - Quick lead intake (text, screenshot, or voice)
-/property /cx /rates /pipeline /content
-/briefing - Daily briefing
-/status - Quick overview
-/help - All commands
+PIPELINE -- "how's my pipeline?" or "what moved this week?"
 
-Send me a screenshot, voice note, or text with lead info and I'll create the contact + mortgage + task Amy to reach out.
+LOOKUP -- "find John Smith" or "what stage is the Thompson deal?"
 
-Your ID: ${userId}`
+EMAILS -- "email Sarah Chen a thank you for the referral"
+
+RATES -- "what are current rates?" or "rate briefing"
+
+PROPERTIES -- rent status, tenant alerts, log expenses
+
+Quick commands:
+/lead /pipeline /briefing /status /rates /property
+
+Your Telegram ID: ${userId}
+
+Send me a lead to get started.`
       );
       return true;
 
