@@ -133,6 +133,8 @@ export async function handleToolCall(name: string, input: Record<string, unknown
     switch (name) {
       case "zoho_create_lead":
         return await zohoCreateLead(input);
+      case "zoho_create_full_lead":
+        return await zohoCreateFullLead(input);
       case "zoho_search_contacts":
         return await zohoSearchContacts(input);
       case "zoho_create_task":
@@ -236,6 +238,199 @@ async function zohoCreateLead(input: Record<string, unknown>): Promise<string> {
     const msg = err instanceof Error ? err.message : String(err);
     console.log(`[Zoho] zohoCreateLead threw: ${msg}`);
     return `Failed to create lead in Zoho: ${msg}`;
+  }
+}
+
+async function zohoCreateFullLead(input: Record<string, unknown>): Promise<string> {
+  if (!input.first_name || !input.last_name || !input.email || !input.purpose) {
+    return "Full lead requires: first_name, last_name, email, and purpose.";
+  }
+
+  let token: string | null;
+  try {
+    token = await getZohoToken();
+  } catch {
+    token = null;
+  }
+
+  if (!token) {
+    return (
+      "Zoho not configured. Lead captured locally:\n" +
+      JSON.stringify(input, null, 2)
+    );
+  }
+
+  const firstName = String(input.first_name);
+  const lastName = String(input.last_name);
+  const email = String(input.email);
+  const purpose = String(input.purpose);
+  const results: string[] = [];
+
+  try {
+    // Step 1: Check for duplicate contact
+    let contactId: string | null = null;
+    try {
+      const searchRes = await zohoFetch(
+        `${ZOHO_API}/Contacts/search?criteria=(Email:equals:${encodeURIComponent(email)})`
+      );
+      const searchData = await searchRes.json();
+      if (searchData.data?.length) {
+        contactId = String(searchData.data[0].id);
+        results.push(`Found existing contact: ${firstName} ${lastName} (${contactId})`);
+      }
+    } catch {
+      // No duplicate found, proceed with creation
+    }
+
+    // Step 2: Create Contact if not exists
+    if (!contactId) {
+      const contactPayload: Record<string, unknown> = {
+        First_Name: firstName,
+        Last_Name: lastName,
+        Email: email,
+        Contact_Status: "Lead",
+      };
+
+      if (input.phone) contactPayload.Phone = String(input.phone);
+      if (input.preferred_name) contactPayload.Other_Name = String(input.preferred_name);
+      if (input.income_type) contactPayload.Description = `Income: ${input.income_type}`;
+      if (input.preferred_communication) {
+        contactPayload.Description = (contactPayload.Description || "") +
+          `\nPreferred contact: ${input.preferred_communication}`;
+      }
+
+      // Add referral source info
+      if (input.referral_source) {
+        contactPayload.Lead_Source = String(input.referral_source);
+      }
+
+      console.log(`[Zoho] Creating contact: ${firstName} ${lastName}`);
+      const contactRes = await zohoFetch(`${ZOHO_API}/Contacts`, {
+        method: "POST",
+        body: JSON.stringify({ data: [contactPayload] }),
+      });
+      const contactData = await contactRes.json();
+
+      if (contactData.data?.[0]?.code === "SUCCESS") {
+        contactId = String(contactData.data[0].details.id);
+        const contactLink = `https://crm.zoho.com/crm/flowmortgageco/tab/Contacts/${contactId}`;
+        results.push(`Contact created: ${firstName} ${lastName}\n  ${contactLink}`);
+      } else {
+        const errMsg = contactData.data?.[0]?.message || JSON.stringify(contactData);
+        results.push(`Contact creation issue: ${errMsg}`);
+      }
+    }
+
+    // Step 3: Create Mortgage (Deal)
+    const dealName = `${lastName}, ${firstName} - ${purpose}`;
+    const dealPayload: Record<string, unknown> = {
+      Deal_Name: dealName,
+      Stage: "Qualification",
+      Pipeline: "Standard (Mortgages)",
+      // AMA field - assign Amy
+      AMA: { id: resolveOwnerId("amy") },
+      // Owner is Alex
+      Owner: { id: resolveOwnerId("alex") },
+    };
+
+    if (input.mortgage_amount) dealPayload.Amount = Number(input.mortgage_amount);
+    if (contactId) dealPayload.Contact_Name = { id: contactId };
+
+    // Build description with all details
+    const descParts: string[] = [];
+    descParts.push(`Purpose: ${purpose}`);
+    if (input.fthb) descParts.push(`FTHB: Yes`);
+    if (input.deal_type) descParts.push(`Deal Type: ${input.deal_type}`);
+    if (input.timeline) descParts.push(`Timeline: ${input.timeline}`);
+    if (input.expected_ltv) descParts.push(`Expected LTV: ${input.expected_ltv}`);
+    if (input.income_type) descParts.push(`Income: ${input.income_type}`);
+    if (input.preferred_communication) descParts.push(`Preferred Contact: ${input.preferred_communication}`);
+    if (input.referral_source) descParts.push(`Referral Source: ${input.referral_source}`);
+    if (input.referrer_name) descParts.push(`Referrer: ${input.referrer_name}`);
+    if (input.realtor_name) descParts.push(`Realtor: ${input.realtor_name}`);
+    if (input.secondary_first_name) {
+      descParts.push(`Co-borrower: ${input.secondary_first_name} ${input.secondary_last_name || ""}`);
+      if (input.secondary_email) descParts.push(`Co-borrower Email: ${input.secondary_email}`);
+      if (input.secondary_income_type) descParts.push(`Co-borrower Income: ${input.secondary_income_type}`);
+    }
+    if (input.key_notes) descParts.push(`\nNotes: ${input.key_notes}`);
+    if (input.overview) descParts.push(`Overview: ${input.overview}`);
+    descParts.push(`\nCreated via Flow Telegram Bot`);
+    dealPayload.Description = descParts.join("\n");
+
+    console.log(`[Zoho] Creating deal: ${dealName}`);
+    const dealRes = await zohoFetch(`${ZOHO_API}/Deals`, {
+      method: "POST",
+      body: JSON.stringify({ data: [dealPayload] }),
+    });
+    const dealData = await dealRes.json();
+
+    let dealId: string | null = null;
+    if (dealData.data?.[0]?.code === "SUCCESS") {
+      dealId = String(dealData.data[0].details.id);
+      const dealLink = `https://crm.zoho.com/crm/flowmortgageco/tab/Deals/${dealId}`;
+      results.push(`Mortgage created: ${dealName}\n  Stage: Qualification\n  ${dealLink}`);
+    } else {
+      const errMsg = dealData.data?.[0]?.message || JSON.stringify(dealData);
+      results.push(`Deal creation issue: ${errMsg}`);
+    }
+
+    // Step 4: Create Task for Amy to reach out
+    const today = new Date();
+    const dueDate = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+    const dueDateStr = dueDate.toISOString().split("T")[0];
+
+    const taskDesc = [
+      `New lead: ${firstName} ${lastName}`,
+      `Email: ${email}`,
+      input.phone ? `Phone: ${input.phone}` : null,
+      `Purpose: ${purpose}`,
+      input.preferred_communication ? `Preferred contact method: ${input.preferred_communication}` : null,
+      input.referral_source ? `Referral: ${input.referral_source}` : null,
+      input.referrer_name ? `Referred by: ${input.referrer_name}` : null,
+      input.key_notes ? `Notes: ${input.key_notes}` : null,
+    ].filter(Boolean).join("\n");
+
+    const taskPayload = {
+      data: [
+        {
+          Subject: `Reach out to new lead: ${firstName} ${lastName}`,
+          Owner: { id: resolveOwnerId("amy") },
+          Due_Date: dueDateStr,
+          Description: taskDesc,
+          Priority: "High",
+          Status: "Not Started",
+          ...(dealId ? { $se_module: "Deals", What_Id: { id: dealId } } : {}),
+        },
+      ],
+    };
+
+    console.log(`[Zoho] Creating outreach task for Amy`);
+    const taskRes = await zohoFetch(`${ZOHO_API}/Tasks`, {
+      method: "POST",
+      body: JSON.stringify(taskPayload),
+    });
+    const taskData = await taskRes.json();
+
+    if (taskData.data?.[0]?.code === "SUCCESS") {
+      results.push(`Task created for Amy: Reach out to ${firstName} ${lastName} (due ${dueDateStr})`);
+    } else {
+      results.push(`Task creation issue: ${JSON.stringify(taskData)}`);
+    }
+
+    // Step 5: Summary
+    return (
+      `LEAD INTAKE COMPLETE\n` +
+      `${"=".repeat(25)}\n` +
+      results.join("\n\n") +
+      `\n\nAmy has been tasked to reach out.` +
+      `\nWelcome email: NOT sent yet` +
+      `\nLead stage: Qualification`
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`[Zoho] zohoCreateFullLead threw: ${msg}`);
+    return `Failed to create full lead: ${msg}\n\nPartial results:\n${results.join("\n")}`;
   }
 }
 

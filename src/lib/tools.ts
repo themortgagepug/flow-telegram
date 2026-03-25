@@ -28,6 +28,77 @@ export const TOOLS = [
     },
   },
   {
+    name: "zoho_create_full_lead",
+    description:
+      "FULL lead intake: creates Contact + Mortgage Deal + assigns Amy as AMA + creates outreach task. Use this instead of zoho_create_lead when you have enough info for a proper mortgage lead. Mirrors the internal New Lead Form.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        first_name: { type: "string", description: "Client first name (REQUIRED)" },
+        last_name: { type: "string", description: "Client last name (REQUIRED)" },
+        preferred_name: { type: "string", description: "Name they go by" },
+        email: { type: "string", description: "Client email (REQUIRED)" },
+        phone: { type: "string", description: "Client phone number" },
+        income_type: {
+          type: "string",
+          enum: ["Employed", "Self-Employed", "Unemployed", "Retired"],
+          description: "Employment type",
+        },
+        purpose: {
+          type: "string",
+          enum: ["Purchase", "Refinance", "Renewal/Switch", "Construction", "2nd Mortgage", "Commercial"],
+          description: "Purpose of mortgage (REQUIRED)",
+        },
+        fthb: { type: "boolean", description: "First time home buyer?" },
+        mortgage_amount: { type: "number", description: "Estimated mortgage amount" },
+        expected_ltv: { type: "string", description: "Expected LTV percentage" },
+        deal_type: {
+          type: "string",
+          enum: ["A", "B", "Private", "TBD"],
+          description: "Deal type (default TBD)",
+        },
+        timeline: {
+          type: "string",
+          enum: ["Urgent", "1-3 Months", "3-6 Months", "6-12 Months", "TBD"],
+          description: "Timeline for the mortgage",
+        },
+        preferred_communication: {
+          type: "string",
+          enum: ["Phone", "Text", "Email"],
+          description: "How client prefers to be contacted",
+        },
+        referral_source: {
+          type: "string",
+          enum: [
+            "Accountant", "Builder", "Cash Flow Success Program", "Client Database",
+            "Facebook", "Financial Advisor/Planner", "Flow Team",
+            "Google or Flow Website", "Hammer Real Estate Group Leads",
+            "Instagram", "Lawyer", "Martine Perron", "Mortgage Broker",
+            "Podcast", "Realtor", "Repeat Client", "Other",
+          ],
+          description: "Where the lead came from",
+        },
+        referrer_name: { type: "string", description: "Name of person who referred (First Last)" },
+        referrer_phone: { type: "string", description: "Referrer phone number" },
+        referrer_email: { type: "string", description: "Referrer email" },
+        realtor_name: { type: "string", description: "Realtor name if purchase (First Last)" },
+        realtor_email: { type: "string", description: "Realtor email" },
+        secondary_first_name: { type: "string", description: "Co-borrower first name" },
+        secondary_last_name: { type: "string", description: "Co-borrower last name" },
+        secondary_email: { type: "string", description: "Co-borrower email" },
+        secondary_phone: { type: "string", description: "Co-borrower phone" },
+        secondary_income_type: {
+          type: "string",
+          enum: ["Employed", "Self-Employed", "Unemployed", "Retired"],
+          description: "Co-borrower employment type",
+        },
+        key_notes: { type: "string", description: "Important notes about the lead" },
+        overview: { type: "string", description: "One-line deal summary" },
+      },
+      required: ["first_name", "last_name", "email", "purpose"],
+    },
+  },
+  {
     name: "zoho_search_contacts",
     description:
       "Search Zoho CRM for a contact or deal by name, email, or phone. Searches both Contacts and Deals modules. Try email if name search fails.",

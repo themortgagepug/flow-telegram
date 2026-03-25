@@ -24,6 +24,8 @@ type TelegramMessage = {
   chat: { id: number; type: string };
   text: string;
   photo?: Array<{ file_id: string; width: number; height: number }>;
+  voice?: { file_id: string; duration: number; mime_type?: string };
+  caption?: string;
   date: number;
 };
 
@@ -86,12 +88,53 @@ export async function handleMessage(message: TelegramMessage, token: string) {
         type: "image",
         source: { type: "base64", media_type: mediaType, data: base64 },
       });
+      const caption = message.caption || text || "";
+      const isLeadContext = /lead|new client|referral|buyer|purchase|mortgage/i.test(caption);
+      const photoPrompt = isLeadContext
+        ? "This is a lead screenshot. Extract ALL contact and mortgage info. Use zoho_create_full_lead to create the lead. Ask clarifying questions for anything missing (email, purpose, referral source are required). Be concise."
+        : "Analyze this image. If it contains lead/contact info, extract it and use zoho_create_full_lead. If it's a bill or receipt, categorize it and log it. If it's a document, describe what it is and suggest next steps.";
       messageContent.push({
         type: "text",
-        text: text || "Analyze this image. If it contains lead/contact info, extract it and create a lead. If it's a bill or receipt, categorize it and log it. If it's a document, describe what it is and suggest next steps.",
+        text: caption ? `${caption}\n\n${photoPrompt}` : photoPrompt,
       });
     } catch (e) {
       messageContent.push({ type: "text", text: text || "I received a photo but couldn't process it." });
+    }
+  } else if (message.voice) {
+    // Handle voice notes -- transcribe via Whisper-compatible API
+    try {
+      const fileUrl = await getFileUrl(token, message.voice.file_id);
+      const audioRes = await fetch(fileUrl);
+      const audioBuffer = await audioRes.arrayBuffer();
+
+      // Use OpenAI Whisper API for transcription (or fallback)
+      const whisperKey = process.env.OPENAI_API_KEY;
+      if (whisperKey) {
+        const formData = new FormData();
+        const audioBlob = new Blob([audioBuffer], { type: message.voice.mime_type || "audio/ogg" });
+        formData.append("file", audioBlob, "voice.ogg");
+        formData.append("model", "whisper-1");
+
+        const whisperRes = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${whisperKey}` },
+          body: formData,
+        });
+        const whisperData = await whisperRes.json() as { text?: string };
+        const transcript = whisperData.text || "Could not transcribe voice note.";
+
+        messageContent.push({
+          type: "text",
+          text: `[Voice note transcription]: ${transcript}\n\nProcess this. If it contains lead info, use zoho_create_full_lead. Ask clarifying questions for anything missing.`,
+        });
+      } else {
+        messageContent.push({
+          type: "text",
+          text: "Voice notes require OpenAI API key for transcription. Please type your message instead, or send a screenshot.",
+        });
+      }
+    } catch (e) {
+      messageContent.push({ type: "text", text: "Couldn't process voice note. Try typing or sending a screenshot." });
     }
   } else {
     messageContent.push({ type: "text", text });
@@ -231,12 +274,13 @@ I'm your AI Chief of Staff. I can:
 - Log expenses & transactions
 
 Commands:
+/lead - Quick lead intake (text, screenshot, or voice)
 /property /cx /rates /pipeline /content
 /briefing - Daily briefing
 /status - Quick overview
 /help - All commands
 
-Or just tell me what you need. Send photos of leads, bills, or documents and I'll handle them.
+Send me a screenshot, voice note, or text with lead info and I'll create the contact + mortgage + task Amy to reach out.
 
 Your ID: ${userId}`
       );
@@ -254,13 +298,13 @@ Agents:
 /content - Content engine
 
 Actions:
+/lead - Quick lead intake (screenshot, voice, or text)
 /briefing - Full daily briefing
 /status - Quick status
-/lead [name] - Create a lead
 /task [description] - Create a task
 /email [recipient] - Draft an email
 
-Or just talk to me naturally. Send screenshots to create leads, photos of bills to log expenses.`
+Send screenshots, voice notes, or text with lead info. I'll extract details, ask about what's missing, create the contact + mortgage, and task Amy to reach out.`
       );
       return true;
 
@@ -298,6 +342,25 @@ Or just talk to me naturally. Send screenshots to create leads, photos of bills 
     case "/status":
       await handleStatusCommand(token, chatId);
       return true;
+
+    case "/lead": {
+      // Switch to pipeline agent for lead context
+      userAgents[userId] = "pipeline";
+      const leadText = text.replace(/^\/lead\s*/i, "").trim();
+      if (!leadText) {
+        await sendMessage(token, chatId,
+          `Lead intake mode. Send me the lead info:\n\n` +
+          `- Screenshot of a text/email/DM\n` +
+          `- Voice note with the details\n` +
+          `- Or just type it out\n\n` +
+          `I'll extract everything, ask about what's missing, and create the contact + mortgage + task Amy to reach out.`
+        );
+        return true;
+      }
+      // Has text -- rewrite the message text and let it fall through to Claude
+      message.text = `NEW LEAD INTAKE: ${leadText}\n\nExtract all info and use zoho_create_full_lead. Ask clarifying questions for anything missing before creating.`;
+      return false;
+    }
 
     default:
       return false; // Not a recognized command, let it fall through to agent
