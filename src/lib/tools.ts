@@ -434,6 +434,27 @@ export const TOOLS = [
     },
   },
 
+  // === PARTNER CALL PROCESSING ===
+  {
+    name: "process_partner_call",
+    description:
+      "Process a partner meeting transcript or notes. Sends to the call intelligence pipeline which generates: meeting summary, follow-up email draft in Alex's voice, Zoho CRM note + task, and emails Alex the ready-to-forward draft. Use when Alex pastes call notes, meeting recap, or voice note transcript about a partner/realtor/lender meeting.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        text: {
+          type: "string",
+          description: "The call transcript, meeting notes, or voice note transcript to process",
+        },
+        partner_name: {
+          type: "string",
+          description: "Partner's name if known (optional - will be extracted from text if not provided)",
+        },
+      },
+      required: ["text"],
+    },
+  },
+
   // === DAILY BRIEFING ===
   {
     name: "get_daily_briefing",

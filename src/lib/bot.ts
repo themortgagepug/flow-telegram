@@ -278,7 +278,7 @@ RATES -- "what are current rates?" or "rate briefing"
 PROPERTIES -- rent status, tenant alerts, log expenses
 
 Quick commands:
-/lead /pipeline /briefing /status /rates /property
+/lead /partner /pipeline /briefing /status /rates /property
 
 Your Telegram ID: ${userId}
 
@@ -299,6 +299,7 @@ Agents:
 
 Actions:
 /lead - Quick lead intake (screenshot, voice, or text)
+/partner - Process partner call (paste notes, get follow-up email)
 /briefing - Full daily briefing
 /status - Quick status
 /task [description] - Create a task
@@ -362,6 +363,23 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
       return false;
     }
 
+    case "/partner": {
+      const partnerText = text.replace(/^\/partner\s*/i, "").trim();
+      if (!partnerText) {
+        await sendMessage(token, chatId,
+          `Partner call processor. Paste your notes:\n\n` +
+          `- Meeting notes or transcript\n` +
+          `- Voice note (just record one)\n` +
+          `- Quick recap of what you discussed\n\n` +
+          `I'll generate a follow-up email in your voice, create the Zoho note + tasks, and email you the draft.`
+        );
+        return true;
+      }
+      // Has text -- rewrite and let Claude use the process_partner_call tool
+      message.text = `PARTNER CALL NOTES: ${partnerText}\n\nProcess this using process_partner_call tool. Send the full text as-is.`;
+      return false;
+    }
+
     default:
       return false; // Not a recognized command, let it fall through to agent
   }
@@ -372,6 +390,7 @@ function detectAgent(text: string): string {
   if (/property|rent|tenant|strata|mortgage|42 ave|55 ave|53a|peters|landlord|lease|unit|vacancy|kyle|bill|expense|maintenance/i.test(lower)) return "property";
   if (/cx|client experience|post.?funding|nps|renewal|annual review|drip|cadence/i.test(lower)) return "cx";
   if (/rate|rates|interest|variable|fixed|boc|bank of canada|lorenzo|cibc/i.test(lower)) return "rates";
+  if (/partner meeting|realtor call|coffee with|met with.*realtor|partner call|follow.?up email.*partner/i.test(lower)) return "pipeline";
   if (/deal|pipeline|zoho|crm|funded|instructed|compliance|james|joana|finmo|lead|pre.?approval/i.test(lower)) return "pipeline";
   if (/content|youtube|video|script|story|carousel|instagram|ig|newsletter|blog|email campaign/i.test(lower)) return "content";
   return "general";

@@ -163,6 +163,8 @@ export async function handleToolCall(name: string, input: Record<string, unknown
         return await generatePreapproval(input);
       case "get_daily_briefing":
         return await getDailyBriefing(input);
+      case "process_partner_call":
+        return await processPartnerCall(input);
       default:
         return `Unknown tool: ${name}`;
     }
@@ -1340,4 +1342,65 @@ async function getDailyBriefing(input: Record<string, unknown>): Promise<string>
 
   briefing += `\nDashboard: mcfadyen-properties.vercel.app`;
   return briefing;
+}
+
+// === PARTNER CALL PROCESSING ===
+
+async function processPartnerCall(input: Record<string, unknown>): Promise<string> {
+  const text = (input.text as string) || "";
+  const partnerName = (input.partner_name as string) || "";
+
+  if (!text || text.length < 20) {
+    return "Need more detail. Paste the full call notes, transcript, or voice note content.";
+  }
+
+  try {
+    const resp = await fetch(
+      "https://transcript-processor-vxwqplu37q-uc.a.run.app/partner",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, partner_name: partnerName }),
+      }
+    );
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      return `Processing failed (${resp.status}): ${err.slice(0, 200)}`;
+    }
+
+    const data = await resp.json();
+
+    let result = `PARTNER CALL PROCESSED\n\n`;
+    result += `Partner: ${data.partner_name || partnerName || "Unknown"}\n`;
+    result += `Summary: ${data.summary || "N/A"}\n\n`;
+
+    if (data.action_items?.length) {
+      result += `ACTION ITEMS:\n`;
+      for (const item of data.action_items) {
+        result += `- ${item.task || item}\n`;
+      }
+      result += `\n`;
+    }
+
+    if (data.commitments?.length) {
+      result += `COMMITMENTS:\n`;
+      for (const c of data.commitments) {
+        result += `- ${c}\n`;
+      }
+      result += `\n`;
+    }
+
+    if (data.follow_up_email) {
+      result += `FOLLOW-UP EMAIL DRAFT:\n---\n${data.follow_up_email}\n---\n\n`;
+    }
+
+    result += `Zoho: ${data.zoho?.status === "success" ? "Note + tasks created" : "Check CRM"}\n`;
+    result += `A formatted version was also emailed to you.`;
+
+    return result;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return `Error processing partner call: ${msg}`;
+  }
 }
