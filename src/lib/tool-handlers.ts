@@ -163,6 +163,8 @@ export async function handleToolCall(name: string, input: Record<string, unknown
         return await generatePreapproval(input);
       case "get_daily_briefing":
         return await getDailyBriefing(input);
+      case "query_brain":
+        return await queryBrain(input);
       case "process_partner_call":
         return await processPartnerCall(input);
       default:
@@ -1248,6 +1250,49 @@ async function generatePreapproval(input: Record<string, unknown>): Promise<stri
     (input.property_address ? `Property: ${input.property_address}\n` : "") +
     `\nTo generate the PDF, use the Pre-Approval button in Zoho CRM, or I can trigger it once the deal is in the system.`
   );
+}
+
+// === KNOWLEDGE BASE ===
+
+async function queryBrain(input: Record<string, unknown>): Promise<string> {
+  try {
+    let query = supabase.from("brain").select("category, topic, content, tags");
+
+    if (input.category) {
+      query = query.eq("category", String(input.category));
+    }
+
+    const { data, error } = await query.order("category");
+
+    if (error) return `Brain query error: ${error.message}`;
+    if (!data?.length) return "No results found in knowledge base.";
+
+    // Filter by search term if provided
+    let results = data;
+    if (input.search) {
+      const term = String(input.search).toLowerCase();
+      results = data.filter(
+        (row: Record<string, unknown>) =>
+          String(row.topic || "").toLowerCase().includes(term) ||
+          String(row.content || "").toLowerCase().includes(term) ||
+          String(row.tags || "").toLowerCase().includes(term)
+      );
+    }
+
+    if (!results.length) return `No results matching "${input.search}" in knowledge base.`;
+
+    const lines = results.map((row: Record<string, unknown>) => {
+      const cat = String(row.category || "");
+      const topic = String(row.topic || "");
+      const content = String(row.content || "");
+      return `[${cat.toUpperCase()}] ${topic}\n${content}`;
+    });
+
+    return `FLOW KNOWLEDGE BASE (${results.length} results):\n\n${lines.join("\n\n---\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Brain query failed: ${msg}`;
+  }
 }
 
 // === DAILY BRIEFING ===

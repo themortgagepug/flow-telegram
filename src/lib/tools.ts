@@ -455,6 +455,28 @@ export const TOOLS = [
     },
   },
 
+  // === KNOWLEDGE BASE ===
+  {
+    name: "query_brain",
+    description:
+      "Search Flow's knowledge base (Supabase brain table) for SOPs, processes, team info, decisions, technical docs, project status, preferences, and content intelligence. Use this whenever you need to look up how something works, who does what, or what the current status of a system/project is.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        category: {
+          type: "string",
+          enum: ["team", "technical", "decision", "process", "preference", "project", "content"],
+          description: "Filter by category. Omit to search all.",
+        },
+        search: {
+          type: "string",
+          description: "Search term to filter results by topic or content (case-insensitive)",
+        },
+      },
+      required: [],
+    },
+  },
+
   // === DAILY BRIEFING ===
   {
     name: "get_daily_briefing",
