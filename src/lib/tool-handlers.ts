@@ -5,7 +5,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 );
 
-const ZOHO_API = "https://www.zohoapis.com/crm/v2";
+const ZOHO_API = "https://www.zohoapis.com/crm/v7";
 const ZOHO_TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token";
 
 // === ZOHO AUTH (module-scoped token cache) ===
