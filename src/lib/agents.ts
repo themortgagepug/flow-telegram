@@ -5,6 +5,46 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 );
 
+// Brain cache -- loaded once, reused across conversations
+let brainCache: string | null = null;
+let brainCacheTime = 0;
+const BRAIN_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
+export async function getBrainContext(): Promise<string> {
+  if (brainCache && Date.now() - brainCacheTime < BRAIN_CACHE_TTL) {
+    return brainCache;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("brain")
+      .select("category, topic, content")
+      .order("category");
+
+    if (error || !data?.length) {
+      return brainCache || "Brain data unavailable.";
+    }
+
+    // Group by category for readability
+    const grouped: Record<string, string[]> = {};
+    for (const row of data) {
+      const cat = String(row.category || "other").toUpperCase();
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(`${row.topic}: ${row.content}`);
+    }
+
+    const sections = Object.entries(grouped).map(
+      ([cat, entries]) => `## ${cat}\n${entries.join("\n\n")}`
+    );
+
+    brainCache = sections.join("\n\n---\n\n");
+    brainCacheTime = Date.now();
+    return brainCache;
+  } catch {
+    return brainCache || "Brain data unavailable.";
+  }
+}
+
 // Agent context builders -- each returns relevant data for Claude to use
 
 export async function getPropertyContext(): Promise<string> {

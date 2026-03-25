@@ -7,6 +7,7 @@ import {
   getPipelineContext,
   getContentContext,
   getSystemPrompt,
+  getBrainContext,
 } from "./agents";
 import { TOOLS } from "./tools";
 import { handleToolCall } from "./tool-handlers";
@@ -144,17 +145,24 @@ export async function handleMessage(message: TelegramMessage, token: string) {
   const agent = userAgents[userId] || detectAgent(text);
   userAgents[userId] = agent;
 
-  // Get context
+  // Get agent-specific context + brain (always loaded)
   let context = "";
   try {
-    switch (agent) {
-      case "property": context = await getPropertyContext(); break;
-      case "cx": context = await getCXContext(); break;
-      case "rates": context = await getRatesContext(); break;
-      case "pipeline": context = await getPipelineContext(); break;
-      case "content": context = await getContentContext(); break;
-      default: context = "No specific context loaded.";
-    }
+    const [agentContext, brainContext] = await Promise.all([
+      (async () => {
+        switch (agent) {
+          case "property": return await getPropertyContext();
+          case "cx": return await getCXContext();
+          case "rates": return await getRatesContext();
+          case "pipeline": return await getPipelineContext();
+          case "content": return await getContentContext();
+          default: return "";
+        }
+      })(),
+      getBrainContext(),
+    ]);
+    context = (agentContext ? `AGENT CONTEXT:\n${agentContext}\n\n` : "") +
+      `FLOW KNOWLEDGE BASE:\n${brainContext}`;
   } catch (e) {
     console.error("Context fetch error:", e);
   }
@@ -182,8 +190,8 @@ export async function handleMessage(message: TelegramMessage, token: string) {
 
     let response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 2048,
-      system: getSystemPrompt(agent) + "\n\nCONTEXT DATA:\n" + context,
+      max_tokens: 4096,
+      system: getSystemPrompt(agent) + "\n\n" + context,
       tools: TOOLS,
       messages,
     });
@@ -221,7 +229,7 @@ export async function handleMessage(message: TelegramMessage, token: string) {
       // Get next response
       response = await anthropic.messages.create({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 2048,
+        max_tokens: 4096,
         system: getSystemPrompt(agent) + "\n\nCONTEXT DATA:\n" + context,
         tools: TOOLS,
         messages,
