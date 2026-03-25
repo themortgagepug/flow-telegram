@@ -344,6 +344,38 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
       await handleStatusCommand(token, chatId);
       return true;
 
+    case "/revenue": {
+      await sendTypingAction(token, chatId);
+      userAgents[userId] = "pipeline";
+      const revResult = await handleToolCall("revenue_dashboard", {});
+      await sendMessage(token, chatId, revResult);
+      return true;
+    }
+
+    case "/partners": {
+      await sendTypingAction(token, chatId);
+      userAgents[userId] = "pipeline";
+      const partResult = await handleToolCall("partner_intelligence", { mode: "followup_suggestions" });
+      await sendMessage(token, chatId, partResult);
+      return true;
+    }
+
+    case "/calc": {
+      const calcText = text.replace(/^\/calc\s*/i, "").trim();
+      if (!calcText) {
+        await sendMessage(token, chatId,
+          `Mortgage calculator. Examples:\n\n` +
+          `"payment on 500k at 4.5%"\n` +
+          `"what can someone afford on 120k income?"\n` +
+          `"LTV on 400k mortgage, 500k property"\n\n` +
+          `Just type it naturally after /calc or ask me directly.`
+        );
+        return true;
+      }
+      message.text = `MORTGAGE CALC REQUEST: ${calcText}\n\nUse the mortgage_calculator tool to answer this.`;
+      return false;
+    }
+
     case "/lead": {
       // Switch to pipeline agent for lead context
       userAgents[userId] = "pipeline";

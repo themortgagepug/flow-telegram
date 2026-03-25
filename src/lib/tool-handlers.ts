@@ -165,6 +165,12 @@ export async function handleToolCall(name: string, input: Record<string, unknown
         return await getDailyBriefing(input);
       case "query_brain":
         return await queryBrain(input);
+      case "revenue_dashboard":
+        return await revenueDashboard(input);
+      case "partner_intelligence":
+        return await partnerIntelligence(input);
+      case "mortgage_calculator":
+        return await mortgageCalculator(input);
       case "process_partner_call":
         return await processPartnerCall(input);
       default:
@@ -1250,6 +1256,315 @@ async function generatePreapproval(input: Record<string, unknown>): Promise<stri
     (input.property_address ? `Property: ${input.property_address}\n` : "") +
     `\nTo generate the PDF, use the Pre-Approval button in Zoho CRM, or I can trigger it once the deal is in the system.`
   );
+}
+
+// === REVENUE DASHBOARD ===
+
+async function revenueDashboard(input: Record<string, unknown>): Promise<string> {
+  try {
+    const now = new Date();
+    const targetMonth = input.month ? String(input.month) : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const [year, month] = targetMonth.split("-").map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const dayOfMonth = now.getMonth() + 1 === month && now.getFullYear() === year ? now.getDate() : daysInMonth;
+
+    // Fetch all deals
+    const res = await zohoFetch(
+      `${ZOHO_API}/Deals?fields=Deal_Name,Stage,Amount,Modified_Time,Closing_Date,Funded_Date,Contact_Name&per_page=200&page=1`
+    );
+    const data = await res.json();
+    if (!data.data?.length) return "No deals found in Zoho CRM.";
+
+    const deals = data.data as Record<string, unknown>[];
+    const MONTHLY_TARGET = 35;
+
+    // Funded this month
+    const funded = deals.filter((d) => {
+      if (d.Stage !== "Funded" && d.Stage !== "Complete") return false;
+      const dateStr = String(d.Funded_Date || d.Closing_Date || d.Modified_Time || "");
+      return dateStr.startsWith(targetMonth);
+    });
+    const fundedTotal = funded.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
+    const avgDeal = funded.length > 0 ? fundedTotal / funded.length : 0;
+
+    // Projected closings (Approved + Instructed)
+    const projected = deals.filter((d) =>
+      d.Stage === "Approved" || d.Stage === "Instructed"
+    );
+    const projectedTotal = projected.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
+
+    // Pace calculation
+    const pace = dayOfMonth > 0 ? Math.round((funded.length / dayOfMonth) * daysInMonth) : 0;
+    const remaining = Math.max(0, MONTHLY_TARGET - funded.length);
+    const daysLeft = daysInMonth - dayOfMonth;
+
+    const lines: string[] = [];
+    lines.push(`REVENUE DASHBOARD - ${targetMonth}\n`);
+    lines.push(`FUNDED: ${funded.length} deals | $${fundedTotal.toLocaleString()}`);
+    lines.push(`TARGET: ${MONTHLY_TARGET} deals`);
+    lines.push(`PACE: ${pace} projected at current rate`);
+    lines.push(`REMAINING: ${remaining} deals needed | ${daysLeft} days left`);
+    lines.push(`AVG DEAL: $${Math.round(avgDeal).toLocaleString()}`);
+
+    if (projected.length) {
+      lines.push(`\nIN THE PIPE (Approved + Instructed):`);
+      lines.push(`${projected.length} deals | $${projectedTotal.toLocaleString()}`);
+      for (const d of projected.slice(0, 5)) {
+        const name = String(d.Deal_Name || "Unnamed");
+        const amt = d.Amount ? `$${Number(d.Amount).toLocaleString()}` : "N/A";
+        const stage = String(d.Stage);
+        lines.push(`  - ${name} | ${stage} | ${amt}`);
+      }
+    }
+
+    if (funded.length > 0) {
+      lines.push(`\nFUNDED THIS MONTH:`);
+      for (const d of funded.slice(0, 10)) {
+        const name = String(d.Deal_Name || "Unnamed");
+        const amt = d.Amount ? `$${Number(d.Amount).toLocaleString()}` : "N/A";
+        lines.push(`  - ${name} | ${amt}`);
+      }
+    }
+
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Revenue dashboard error: ${msg}`;
+  }
+}
+
+// === PARTNER INTELLIGENCE ===
+
+async function partnerIntelligence(input: Record<string, unknown>): Promise<string> {
+  try {
+    const mode = String(input.mode || "followup_suggestions");
+
+    if (mode === "lookup" && input.partner_name) {
+      const name = String(input.partner_name);
+      const res = await zohoFetch(
+        `${ZOHO_API}/Contacts/search?criteria=(Full_Name:contains:${encodeURIComponent(name)})&fields=Full_Name,Email,Phone,Partner_Temperature,Last_Meeting_Date,Next_Touch_Date,Meeting_Count,Touch_Count,Contact_Type,Partner_Status,Referrals_Given,Modified_Time`
+      );
+      const data = await res.json();
+      if (!data.data?.length) return `No partner found matching "${name}".`;
+
+      const lines: string[] = [];
+      for (const c of data.data as Record<string, unknown>[]) {
+        lines.push(`${c.Full_Name}`);
+        if (c.Email) lines.push(`  Email: ${c.Email}`);
+        if (c.Phone) lines.push(`  Phone: ${c.Phone}`);
+        if (c.Partner_Temperature) lines.push(`  Temperature: ${c.Partner_Temperature}`);
+        if (c.Partner_Status) lines.push(`  Rank: ${c.Partner_Status}`);
+        if (c.Last_Meeting_Date) lines.push(`  Last Meeting: ${c.Last_Meeting_Date}`);
+        if (c.Next_Touch_Date) lines.push(`  Next Touch: ${c.Next_Touch_Date}`);
+        if (c.Meeting_Count) lines.push(`  Meetings: ${c.Meeting_Count}`);
+        if (c.Referrals_Given) lines.push(`  Referrals: ${c.Referrals_Given}`);
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+
+    // Cold check / followup suggestions - fetch partners with Last_Meeting_Date
+    const res = await zohoFetch(
+      `${ZOHO_API}/Contacts/search?criteria=(Partner_Temperature:in:Hot,Warm,Cool,Cold,New)&fields=Full_Name,Email,Phone,Partner_Temperature,Last_Meeting_Date,Next_Touch_Date,Referrals_Given,Partner_Status,Modified_Time&per_page=100`
+    );
+    const data = await res.json();
+    if (!data.data?.length) return "No partners found with temperature set in Zoho.";
+
+    const partners = data.data as Record<string, unknown>[];
+    const now = Date.now();
+    const THREE_WEEKS = 21 * 86400000;
+
+    // Calculate days since last touch
+    const withAge = partners.map((p: Record<string, unknown>) => {
+      const lastMeeting = p.Last_Meeting_Date ? new Date(String(p.Last_Meeting_Date)).getTime() : 0;
+      const lastModified = p.Modified_Time ? new Date(String(p.Modified_Time)).getTime() : 0;
+      const lastTouch = Math.max(lastMeeting, lastModified);
+      const daysSince = lastTouch > 0 ? Math.floor((now - lastTouch) / 86400000) : 999;
+      return { ...p, daysSince, lastTouch } as Record<string, unknown> & { daysSince: number; lastTouch: number };
+    });
+
+    if (mode === "cold_check") {
+      const cold = withAge.filter((p) => p.daysSince >= 21).sort((a, b) => b.daysSince - a.daysSince);
+      if (!cold.length) return "No partners going cold. Everyone's been touched in the last 3 weeks.";
+
+      const lines = [`PARTNERS GOING COLD (21+ days no touch):\n`];
+      for (const p of cold.slice(0, 15)) {
+        lines.push(`${p.Full_Name} | ${p.Partner_Temperature || "?"} | ${p.daysSince}d ago | Referrals: ${p.Referrals_Given || 0}`);
+      }
+      return lines.join("\n");
+    }
+
+    // followup_suggestions - prioritize by: high temp going cold, most referrals, longest gap
+    const suggestions = withAge
+      .filter((p) => p.daysSince >= 14)
+      .sort((a, b) => {
+        // Prioritize hot/warm partners going cold
+        const tempScore: Record<string, number> = { Hot: 5, Warm: 4, New: 3, Cool: 2, Cold: 1 };
+        const aScore = (tempScore[String(a.Partner_Temperature)] || 0) * 10 + Number(a.Referrals_Given || 0);
+        const bScore = (tempScore[String(b.Partner_Temperature)] || 0) * 10 + Number(b.Referrals_Given || 0);
+        return bScore - aScore;
+      });
+
+    if (!suggestions.length) return "All partners are fresh. No follow-ups needed right now.";
+
+    const lines = [`FOLLOW-UP SUGGESTIONS (14+ days, prioritized):\n`];
+    for (const p of suggestions.slice(0, 10)) {
+      lines.push(
+        `${p.Full_Name} | ${p.Partner_Temperature || "?"} | ${p.daysSince}d since last touch | Rank: ${p.Partner_Status || "?"} | Referrals: ${p.Referrals_Given || 0}`
+      );
+    }
+    lines.push(`\nTip: Start with the top 3. A quick text or coffee invite keeps the relationship warm.`);
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Partner intelligence error: ${msg}`;
+  }
+}
+
+// === MORTGAGE CALCULATOR ===
+
+function calcMonthlyPayment(principal: number, annualRate: number, amortYears: number): number {
+  const r = annualRate / 100 / 12;
+  const n = amortYears * 12;
+  if (r === 0) return principal / n;
+  return principal * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+}
+
+function cmhcPremiumRate(ltv: number): number {
+  if (ltv <= 80) return 0;
+  if (ltv <= 85) return 0.028;
+  if (ltv <= 90) return 0.031;
+  if (ltv <= 95) return 0.04;
+  return 0; // Over 95% not insurable
+}
+
+async function mortgageCalculator(input: Record<string, unknown>): Promise<string> {
+  const mode = String(input.mode || "payment");
+  const amort = Number(input.amortization || 25);
+
+  if (mode === "payment") {
+    const principal = Number(input.mortgage_amount || 0);
+    const rate = Number(input.rate || 5.0);
+    if (!principal) return "Need mortgage_amount for payment calc.";
+
+    const monthly = calcMonthlyPayment(principal, rate, amort);
+    const biweekly = (monthly * 12) / 26;
+    const totalPaid = monthly * amort * 12;
+    const totalInterest = totalPaid - principal;
+
+    return [
+      `PAYMENT CALCULATOR`,
+      ``,
+      `Mortgage: $${principal.toLocaleString()}`,
+      `Rate: ${rate}%`,
+      `Amortization: ${amort} years`,
+      ``,
+      `Monthly: $${Math.round(monthly).toLocaleString()}`,
+      `Bi-weekly accelerated: $${Math.round(biweekly).toLocaleString()}`,
+      `Total interest: $${Math.round(totalInterest).toLocaleString()}`,
+    ].join("\n");
+  }
+
+  if (mode === "ltv") {
+    const mortgage = Number(input.mortgage_amount || 0);
+    const value = Number(input.property_value || 0);
+    if (!mortgage || !value) return "Need mortgage_amount and property_value for LTV calc.";
+
+    const ltv = (mortgage / value) * 100;
+    const premRate = cmhcPremiumRate(ltv);
+    const premium = premRate > 0 ? mortgage * premRate : 0;
+
+    const lines = [
+      `LTV CALCULATOR`,
+      ``,
+      `Mortgage: $${mortgage.toLocaleString()}`,
+      `Property Value: $${value.toLocaleString()}`,
+      `LTV: ${ltv.toFixed(1)}%`,
+    ];
+    if (premRate > 0) {
+      lines.push(`CMHC Insurance: ${(premRate * 100).toFixed(1)}% = $${Math.round(premium).toLocaleString()}`);
+      lines.push(`Total Mortgage w/ CMHC: $${Math.round(mortgage + premium).toLocaleString()}`);
+    } else {
+      lines.push(`No CMHC insurance required (LTV <= 80%)`);
+    }
+    return lines.join("\n");
+  }
+
+  if (mode === "affordability") {
+    const income = Number(input.annual_income || 0);
+    if (!income) return "Need annual_income for affordability calc.";
+
+    const monthlyIncome = income / 12;
+    const monthlyDebts = Number(input.monthly_debts || 0);
+    const contractRate = Number(input.rate || 5.0);
+    const stressRate = Math.max(contractRate + 2, 5.25);
+    const downPayment = Number(input.down_payment || 0);
+
+    // Property tax estimate: ~1% of value / 12
+    // Heat: $150/month (CMHC standard)
+    const heat = 150;
+
+    // GDS: 39% of gross monthly = PITH (principal + interest + tax + heat)
+    const maxGDS = monthlyIncome * 0.39;
+    // TDS: 44% of gross monthly = PITH + debts
+    const maxTDS = monthlyIncome * 0.44;
+
+    // Max PITH from TDS (more restrictive when debts exist)
+    const maxPITH_gds = maxGDS;
+    const maxPITH_tds = maxTDS - monthlyDebts;
+    const maxPITH = Math.min(maxPITH_gds, maxPITH_tds);
+
+    // Property tax = ~1%/year of value = approx $propertyValue * 0.01 / 12
+    // This is circular (depends on property value), so iterate
+    let maxMortgage = 0;
+    let maxPurchase = 0;
+
+    // Iterative solver: start with estimate, converge
+    let estimate = maxPITH * 200; // rough starting point
+    for (let i = 0; i < 20; i++) {
+      const propTax = estimate * 0.01 / 12;
+      const availableForPI = maxPITH - propTax - heat;
+      if (availableForPI <= 0) { estimate *= 0.5; continue; }
+
+      // Back out max mortgage from available PI using stress test rate
+      const r = stressRate / 100 / 12;
+      const n = amort * 12;
+      const maxMort = availableForPI * (Math.pow(1 + r, n) - 1) / (r * Math.pow(1 + r, n));
+
+      // Check if CMHC applies
+      const ltv = downPayment > 0 ? (maxMort / (maxMort + downPayment)) * 100 : 95;
+      const premRate = cmhcPremiumRate(ltv);
+      // CMHC premium is added to mortgage, so actual borrowing = maxMort / (1 + premRate)
+      const effectiveMortgage = premRate > 0 ? maxMort / (1 + premRate) : maxMort;
+
+      maxMortgage = effectiveMortgage;
+      maxPurchase = effectiveMortgage + downPayment;
+      estimate = maxPurchase; // converge
+    }
+
+    const actualPayment = calcMonthlyPayment(maxMortgage, contractRate, amort);
+
+    return [
+      `AFFORDABILITY CALCULATOR (Canadian Rules)`,
+      ``,
+      `Income: $${income.toLocaleString()}/year ($${Math.round(monthlyIncome).toLocaleString()}/mo)`,
+      monthlyDebts > 0 ? `Monthly debts: $${monthlyDebts.toLocaleString()}` : `No monthly debts`,
+      downPayment > 0 ? `Down payment: $${downPayment.toLocaleString()}` : `No down payment specified`,
+      ``,
+      `Stress test rate: ${stressRate}%`,
+      `GDS limit: 39% | TDS limit: 44%`,
+      ``,
+      `MAX PURCHASE: $${Math.round(maxPurchase).toLocaleString()}`,
+      `MAX MORTGAGE: $${Math.round(maxMortgage).toLocaleString()}`,
+      ``,
+      `At ${contractRate}% actual rate:`,
+      `Monthly payment: $${Math.round(actualPayment).toLocaleString()}`,
+      `Bi-weekly: $${Math.round((actualPayment * 12) / 26).toLocaleString()}`,
+      maxMortgage / maxPurchase > 0.8 ? `\nNote: CMHC insurance applies (LTV > 80%)` : ``,
+    ].join("\n");
+  }
+
+  return "Unknown mode. Use: affordability, payment, or ltv";
 }
 
 // === KNOWLEDGE BASE ===

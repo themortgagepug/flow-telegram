@@ -455,6 +455,70 @@ export const TOOLS = [
     },
   },
 
+  // === REVENUE DASHBOARD ===
+  {
+    name: "revenue_dashboard",
+    description:
+      "Revenue tracking dashboard: funded deals this month vs 35-deal target, projected closings, avg deal size, pace. Use when Alex asks 'how am I tracking', 'revenue', 'funded this month', 'pace to target', or anything about monthly performance.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        month: {
+          type: "string",
+          description: "Month to check in YYYY-MM format (default: current month)",
+        },
+      },
+      required: [],
+    },
+  },
+
+  // === PARTNER INTELLIGENCE ===
+  {
+    name: "partner_intelligence",
+    description:
+      "Partner relationship intelligence. Look up a specific partner, find partners going cold (no touch in 3+ weeks), or get follow-up suggestions. Use when Alex asks 'who should I follow up with', 'when did I last talk to [name]', 'cold partners', or anything about partner relationships.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["lookup", "cold_check", "followup_suggestions"],
+          description: "lookup=specific partner, cold_check=partners going cold, followup_suggestions=who to reach out to",
+        },
+        partner_name: {
+          type: "string",
+          description: "Partner name for lookup mode",
+        },
+      },
+      required: [],
+    },
+  },
+
+  // === MORTGAGE CALCULATOR ===
+  {
+    name: "mortgage_calculator",
+    description:
+      "Quick Canadian mortgage math. Affordability (income to max purchase), payment calc, or LTV. Uses Canadian qualifying rules: stress test (contract+2% or 5.25% floor), GDS 39%, TDS 44%, CMHC insurance thresholds. Use when anyone asks 'what can they afford', 'what's the payment on', 'calculate LTV', or any mortgage math question.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["affordability", "payment", "ltv"],
+          description: "Calculator mode",
+        },
+        annual_income: { type: "number", description: "Gross annual income (for affordability)" },
+        monthly_debts: { type: "number", description: "Monthly debt payments - car, LOC, etc (default 0)" },
+        down_payment: { type: "number", description: "Down payment amount (for affordability)" },
+        rate: { type: "number", description: "Interest rate % (e.g. 4.5)" },
+        amortization: { type: "number", description: "Amortization in years (default 25)" },
+        mortgage_amount: { type: "number", description: "Mortgage amount (for payment/LTV)" },
+        property_value: { type: "number", description: "Property value (for LTV)" },
+      },
+      required: ["mode"],
+    },
+  },
+
   // === KNOWLEDGE BASE ===
   {
     name: "query_brain",
