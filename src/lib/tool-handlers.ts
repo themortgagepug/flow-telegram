@@ -728,11 +728,26 @@ async function zohoPipelineReport(): Promise<string> {
             : String(d.Contact_Name)
           : "";
 
+        const lender = d.Lender_Name ? ` | ${d.Lender_Name}` : "";
+        const closing = d.Closing_Date ? ` | Close: ${d.Closing_Date}` : "";
+        const holdReason = d.ON_HOLD_Reason ? ` | HOLD: ${d.ON_HOLD_Reason}` : "";
+        const lastEmail = d.Date_of_Last_Email ? ` | Last update: ${d.Date_of_Last_Email}` : "";
+        const owner = d.Owner && typeof d.Owner === "object"
+          ? String((d.Owner as Record<string, unknown>).name || "")
+          : "";
+        const ama = d.AMA && typeof d.AMA === "object"
+          ? String((d.AMA as Record<string, unknown>).name || "")
+          : "";
+        const team = (owner || ama) ? ` | ${owner}${ama ? "/" + ama : ""}` : "";
+        const staleFlag = daysAging !== null && daysAging >= 5 ? " ⚠️" : "";
+
         lines.push(
           `  - ${dealName}` +
             (contactName ? ` (${contactName})` : "") +
             ` | ${amount}` +
-            (daysAging !== null ? ` | ${daysAging}d in stage` : "")
+            (daysAging !== null ? ` | ${daysAging}d` : "") +
+            staleFlag +
+            lender + closing + holdReason + lastEmail + team
         );
       }
       lines.push("");
@@ -800,21 +815,49 @@ async function zohoGetDealDetails(input: Record<string, unknown>): Promise<strin
       ? Math.floor((now - createdMs) / 86400000)
       : null;
 
+    const amaName = typeof d.AMA === "object" && d.AMA !== null
+      ? String((d.AMA as Record<string, unknown>).name || "")
+      : "";
+    const lsName = typeof d.Loan_Specialist === "object" && d.Loan_Specialist !== null
+      ? String((d.Loan_Specialist as Record<string, unknown>).name || "")
+      : "";
+
     const lines = [
       `DEAL: ${String(d.Deal_Name || "Unnamed")}`,
-      `Link: ${link}`,
+      `${link}`,
       ``,
       `Stage: ${String(d.Stage || "Unknown")}${daysInStage !== null ? ` (${daysInStage}d in stage)` : ""}`,
       `Amount: ${d.Amount ? `$${Number(d.Amount).toLocaleString()}` : "Not set"}`,
       `Client: ${contactName || "None linked"}`,
-      `Assigned to: ${ownerName}`,
-      ``,
-      `Created: ${d.Created_Time ? String(d.Created_Time).split("T")[0] : "Unknown"}${daysOld !== null ? ` (${daysOld} days ago)` : ""}`,
-      `Last modified: ${d.Modified_Time ? String(d.Modified_Time).split("T")[0] : "Unknown"}`,
+      `MA: ${ownerName}${amaName ? ` | AMA: ${amaName}` : ""}${lsName ? ` | LS: ${lsName}` : ""}`,
     ];
 
-    if (d.Description) lines.push(`\nNotes: ${String(d.Description)}`);
-    if (d.Closing_Date) lines.push(`Closing date: ${String(d.Closing_Date)}`);
+    if (d.Pipeline) lines.push(`Pipeline: ${d.Pipeline}`);
+    if (d.Lender_Name) lines.push(`Lender: ${d.Lender_Name}`);
+    if (d.Mortgage_Rate) lines.push(`Rate: ${d.Mortgage_Rate}%`);
+    if (d.Amortization_Years) lines.push(`Amortization: ${d.Amortization_Years} years`);
+    if (d.Mortgage_Type) lines.push(`Type: ${d.Mortgage_Type}`);
+    if (d.Deal_Type) lines.push(`Deal Type: ${d.Deal_Type}`);
+    if (d.High_Ratio_Insurable_Uninsurable) lines.push(`Insurance: ${d.High_Ratio_Insurable_Uninsurable}`);
+    if (d.Condo_Freehold) lines.push(`Property: ${d.Condo_Freehold}`);
+    if (d.City) lines.push(`City: ${d.City}`);
+    if (d.Closing_Date) lines.push(`Closing: ${d.Closing_Date}`);
+    if (d.Funded_Date) lines.push(`Funded: ${d.Funded_Date}`);
+
+    if (d.ON_HOLD_Reason) {
+      lines.push(`\nON HOLD: ${d.ON_HOLD_Reason}`);
+      if (d.On_Hold_Reason_Notes) lines.push(`Hold notes: ${d.On_Hold_Reason_Notes}`);
+      if (d.Hold_Re_engage_Date) lines.push(`Re-engage: ${d.Hold_Re_engage_Date}`);
+    }
+    if (d.Reason_For_Loss) lines.push(`Lost reason: ${d.Reason_For_Loss}`);
+
+    if (d.Date_of_Last_Email) lines.push(`\nLast client update: ${d.Date_of_Last_Email}`);
+    if (d.Additional_Conditions) lines.push(`Conditions: ${String(d.Additional_Conditions).slice(0, 300)}`);
+
+    lines.push(`\nCreated: ${d.Created_Time ? String(d.Created_Time).split("T")[0] : "?"}${daysOld !== null ? ` (${daysOld}d ago)` : ""}`);
+    lines.push(`Modified: ${d.Modified_Time ? String(d.Modified_Time).split("T")[0] : "?"}`);
+
+    if (d.Description) lines.push(`\nNotes: ${String(d.Description).slice(0, 500)}`);
 
     return lines.join("\n");
   } catch (err) {
