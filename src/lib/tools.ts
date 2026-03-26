@@ -455,6 +455,18 @@ export const TOOLS = [
     },
   },
 
+  // === CEO INTEL ===
+  {
+    name: "ceo_dashboard",
+    description:
+      "CEO-level business intelligence. The big picture. Use when Alex asks 'how's the business', 'give me the pulse', 'what do I need to know', 'what needs my attention', or any high-level business question. Combines pipeline, revenue, stuck deals, team workload, and partner health into one view.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+
   // === REVENUE DASHBOARD ===
   {
     name: "revenue_dashboard",

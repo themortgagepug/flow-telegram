@@ -165,6 +165,8 @@ export async function handleToolCall(name: string, input: Record<string, unknown
         return await getDailyBriefing(input);
       case "query_brain":
         return await queryBrain(input);
+      case "ceo_dashboard":
+        return await ceoDashboard();
       case "revenue_dashboard":
         return await revenueDashboard(input);
       case "partner_intelligence":
@@ -648,9 +650,22 @@ async function zohoPipelineReport(): Promise<string> {
   try {
     console.log("[Zoho] Fetching pipeline report -- all open deals");
 
-    // Fetch up to 200 deals -- sufficient for most pipelines
+    // Fetch deals with CEO-level fields
+    const DEAL_FIELDS = [
+      "Deal_Name", "Stage", "Amount", "Pipeline",
+      "Modified_Time", "Created_Time", "Closing_Date",
+      "Contact_Name", "Owner", "AMA", "Loan_Specialist",
+      "Lender_Name", "Mortgage_Rate", "Amortization_Years",
+      "ON_HOLD_Reason", "On_Hold_Reason_Notes", "Hold_Re_engage_Date",
+      "Reason_For_Loss", "Lost_To",
+      "Condo_Freehold", "City",
+      "Mortgage_Type", "Deal_Type", "High_Ratio_Insurable_Uninsurable",
+      "Buyer_s_Realtor", "Funded_Date",
+      "Date_of_Last_Email", "Additional_Conditions",
+    ].join(",");
+
     const res = await zohoFetch(
-      `${ZOHO_API}/Deals?fields=Deal_Name,Stage,Amount,Modified_Time,Created_Time,Contact_Name,Owner&per_page=200&page=1`
+      `${ZOHO_API}/Deals?fields=${DEAL_FIELDS}&per_page=200&page=1`
     );
     const data = await res.json();
     console.log(`[Zoho] Pipeline report: ${data.data?.length || 0} deals returned`);
@@ -1256,6 +1271,139 @@ async function generatePreapproval(input: Record<string, unknown>): Promise<stri
     (input.property_address ? `Property: ${input.property_address}\n` : "") +
     `\nTo generate the PDF, use the Pre-Approval button in Zoho CRM, or I can trigger it once the deal is in the system.`
   );
+}
+
+// === CEO DASHBOARD ===
+
+async function ceoDashboard(): Promise<string> {
+  try {
+    const DEAL_FIELDS = [
+      "Deal_Name", "Stage", "Amount", "Pipeline",
+      "Modified_Time", "Created_Time", "Closing_Date",
+      "Contact_Name", "Owner", "AMA",
+      "Lender_Name", "ON_HOLD_Reason", "On_Hold_Reason_Notes",
+      "Date_of_Last_Email", "Funded_Date",
+    ].join(",");
+
+    const [dealsRes, tasksRes] = await Promise.all([
+      zohoFetch(`${ZOHO_API}/Deals?fields=${DEAL_FIELDS}&per_page=200&page=1`),
+      zohoFetch(`${ZOHO_API}/Tasks?fields=Subject,Status,Due_Date,Owner,Priority,What_Id&per_page=50&sort_by=Due_Date&sort_order=asc`),
+    ]);
+
+    const dealsData = await dealsRes.json();
+    const tasksData = await tasksRes.json();
+    const deals = (dealsData.data || []) as Record<string, unknown>[];
+    const tasks = (tasksData.data || []) as Record<string, unknown>[];
+    const now = Date.now();
+    const today = new Date().toISOString().split("T")[0];
+    const currentMonth = today.slice(0, 7);
+
+    const lines: string[] = [];
+
+    // 1. REVENUE PULSE
+    const funded = deals.filter((d) => {
+      if (d.Stage !== "Funded" && d.Stage !== "Complete") return false;
+      const dateStr = String(d.Funded_Date || d.Closing_Date || d.Modified_Time || "");
+      return dateStr.startsWith(currentMonth);
+    });
+    const fundedTotal = funded.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
+    const dayOfMonth = new Date().getDate();
+    const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+    const pace = dayOfMonth > 0 ? Math.round((funded.length / dayOfMonth) * daysInMonth) : 0;
+
+    lines.push(`REVENUE: ${funded.length}/35 funded | $${fundedTotal.toLocaleString()} | Pace: ${pace}/mo`);
+
+    // 2. PIPELINE SNAPSHOT
+    const stageCounts: Record<string, { count: number; value: number }> = {};
+    const activeStages = ["Qualification", "Pre-Approval", "Submitted", "Approved", "Instructed"];
+    for (const d of deals) {
+      const stage = String(d.Stage || "");
+      if (!activeStages.includes(stage)) continue;
+      if (!stageCounts[stage]) stageCounts[stage] = { count: 0, value: 0 };
+      stageCounts[stage].count++;
+      stageCounts[stage].value += Number(d.Amount || 0);
+    }
+    const totalActive = Object.values(stageCounts).reduce((s, v) => s + v.count, 0);
+    const totalValue = Object.values(stageCounts).reduce((s, v) => s + v.value, 0);
+    lines.push(`\nPIPELINE: ${totalActive} active deals | $${totalValue.toLocaleString()}`);
+    for (const stage of activeStages) {
+      const s = stageCounts[stage];
+      if (s) lines.push(`  ${stage}: ${s.count} | $${s.value.toLocaleString()}`);
+    }
+
+    // 3. NEEDS ATTENTION -- stuck deals
+    const stuck: string[] = [];
+    for (const d of deals) {
+      const stage = String(d.Stage || "");
+      if (["Funded", "Complete", "Lost"].includes(stage)) continue;
+      const modMs = d.Modified_Time ? new Date(String(d.Modified_Time)).getTime() : 0;
+      const days = modMs > 0 ? Math.floor((now - modMs) / 86400000) : 0;
+      if (days >= 5) {
+        const name = String(d.Deal_Name || "?");
+        const reason = d.ON_HOLD_Reason ? ` (${d.ON_HOLD_Reason})` : "";
+        stuck.push(`  ${name} | ${stage} | ${days}d stale${reason}`);
+      }
+    }
+    if (stuck.length) {
+      lines.push(`\nSTUCK (5+ days, need action):`);
+      lines.push(...stuck.slice(0, 8));
+      if (stuck.length > 8) lines.push(`  ...and ${stuck.length - 8} more`);
+    }
+
+    // 4. UPCOMING CLOSINGS
+    const sevenDaysOut = new Date(now + 7 * 86400000).toISOString().split("T")[0];
+    const closingSoon = deals.filter((d) => {
+      const cd = String(d.Closing_Date || "");
+      return cd >= today && cd <= sevenDaysOut && !["Funded", "Complete", "Lost"].includes(String(d.Stage));
+    });
+    if (closingSoon.length) {
+      lines.push(`\nCLOSING THIS WEEK:`);
+      for (const d of closingSoon) {
+        lines.push(`  ${d.Deal_Name} | ${d.Stage} | $${Number(d.Amount || 0).toLocaleString()} | ${d.Closing_Date}`);
+      }
+    }
+
+    // 5. ON HOLD
+    const onHold = deals.filter((d) => String(d.Stage || "").includes("Hold"));
+    if (onHold.length) {
+      lines.push(`\nON HOLD (${onHold.length}):`);
+      for (const d of onHold.slice(0, 5)) {
+        const reason = d.ON_HOLD_Reason ? String(d.ON_HOLD_Reason) : "No reason";
+        lines.push(`  ${d.Deal_Name} | ${reason}`);
+      }
+    }
+
+    // 6. OVERDUE TASKS
+    const overdue = tasks.filter((t) => {
+      const due = String(t.Due_Date || "");
+      return due && due < today && String(t.Status) !== "Completed";
+    });
+    if (overdue.length) {
+      lines.push(`\nOVERDUE TASKS (${overdue.length}):`);
+      for (const t of overdue.slice(0, 5)) {
+        const owner = t.Owner && typeof t.Owner === "object" ? String((t.Owner as Record<string, unknown>).name || "") : "";
+        lines.push(`  ${t.Subject} | ${owner} | Due: ${t.Due_Date}`);
+      }
+    }
+
+    // 7. BIGGEST DEALS IN PLAY
+    const bigDeals = deals
+      .filter((d) => activeStages.includes(String(d.Stage || "")) && Number(d.Amount || 0) > 0)
+      .sort((a, b) => Number(b.Amount || 0) - Number(a.Amount || 0))
+      .slice(0, 5);
+    if (bigDeals.length) {
+      lines.push(`\nBIGGEST DEALS IN PLAY:`);
+      for (const d of bigDeals) {
+        lines.push(`  ${d.Deal_Name} | ${d.Stage} | $${Number(d.Amount || 0).toLocaleString()}${d.Lender_Name ? ` | ${d.Lender_Name}` : ""}`);
+      }
+    }
+
+    lines.push(`\nWhat do you want to dig into?`);
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `CEO dashboard error: ${msg}`;
+  }
 }
 
 // === REVENUE DASHBOARD ===

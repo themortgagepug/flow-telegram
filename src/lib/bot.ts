@@ -271,26 +271,23 @@ async function handleCommand(text: string, message: TelegramMessage, token: stri
       await sendMessage(token, chatId,
         `Hey ${message.from.first_name}. Flow Agent is live.
 
-What I do best:
+/pulse -- The big picture. Revenue, pipeline, stuck deals, closings, overdue tasks, biggest deals in play. One command.
 
-NEW LEAD -- screenshot, forward, or type lead info. I create the contact, mortgage, and task Amy to reach out. All in Zoho.
+/lead -- Screenshot, forward, or type lead info. Contact + mortgage + Amy tasked. Done.
 
-PIPELINE -- "how's my pipeline?" or "what moved this week?"
+/revenue -- Funded vs 35-deal target, pace, projections.
 
-LOOKUP -- "find John Smith" or "what stage is the Thompson deal?"
+/partners -- Who's going cold? Who to follow up with?
 
-EMAILS -- "email Sarah Chen a thank you for the referral"
+/calc -- "What can someone afford on 120k?" Instant Canadian mortgage math.
 
-RATES -- "what are current rates?" or "rate briefing"
+/pipeline -- Full pipeline by stage.
 
-PROPERTIES -- rent status, tenant alerts, log expenses
+/briefing -- Everything across all systems.
 
-Quick commands:
-/lead /partner /pipeline /briefing /status /rates /property
+Or just talk to me. I know the whole team, every process, every SOP.
 
-Your Telegram ID: ${userId}
-
-Send me a lead to get started.`
+Your Telegram ID: ${userId}`
       );
       return true;
 
@@ -351,6 +348,14 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
     case "/status":
       await handleStatusCommand(token, chatId);
       return true;
+
+    case "/pulse": {
+      await sendTypingAction(token, chatId);
+      userAgents[userId] = "pipeline";
+      const pulseResult = await handleToolCall("ceo_dashboard", {});
+      await sendMessage(token, chatId, pulseResult);
+      return true;
+    }
 
     case "/revenue": {
       await sendTypingAction(token, chatId);
