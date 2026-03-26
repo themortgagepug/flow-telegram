@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { handleMessage } from "@/lib/bot";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
@@ -31,28 +32,30 @@ export async function POST(req: NextRequest) {
 
   const chatId = (message.chat as Record<string, unknown>)?.id as number;
 
-  // Process synchronously (not in after()) so errors surface in logs
-  try {
-    await handleMessage(message as Parameters<typeof handleMessage>[0], TELEGRAM_BOT_TOKEN);
-  } catch (error) {
-    console.error("[Route] Message handler error:", error);
-    // Try to notify user
-    if (chatId && TELEGRAM_BOT_TOKEN) {
-      try {
-        const errText = error instanceof Error ? error.message : String(error);
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: `Error: ${errText.slice(0, 200)}\n\nTry again or rephrase.`,
-          }),
-        });
-      } catch {
-        console.error("[Route] Failed to send error notification");
+  // Return 200 immediately so Telegram doesn't timeout
+  // Process in background via after()
+  after(async () => {
+    try {
+      await handleMessage(message as Parameters<typeof handleMessage>[0], TELEGRAM_BOT_TOKEN);
+    } catch (error) {
+      console.error("[Route] Message handler error:", error);
+      if (chatId && TELEGRAM_BOT_TOKEN) {
+        try {
+          const errText = error instanceof Error ? error.message : String(error);
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: `Error: ${errText.slice(0, 200)}\n\nTry again or rephrase.`,
+            }),
+          });
+        } catch {
+          console.error("[Route] Failed to send error notification");
+        }
       }
     }
-  }
+  });
 
   return NextResponse.json({ ok: true });
 }
@@ -64,9 +67,9 @@ export async function GET() {
 
   return NextResponse.json({
     status: "Flow Agent Bot is running",
-    version: "2.1",
+    version: "2.2",
     agents: ["property", "cx", "rates", "pipeline", "content", "general"],
-    tools: 16,
+    tools: 20,
     health: {
       telegram_token: hasToken ? "set" : "MISSING",
       anthropic_key: hasAnthropic ? "set" : "MISSING",
