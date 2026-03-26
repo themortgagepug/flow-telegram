@@ -1359,63 +1359,89 @@ async function flowiqSearch(input: Record<string, unknown>): Promise<string> {
   if (!query) return "Need a query. E.g. 'self-employed 90% LTV purchase' or 'which lenders do stated income?'";
 
   try {
-    // Search lender_guidelines table with text matching
     const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
-    let dbQuery = supabase
+    const lines: string[] = [];
+
+    // 1. Search lender_guidelines (3,843 rows - columns: lender, policy, status, guideline, category)
+    let guidelineQuery = supabase
       .from("lender_guidelines")
-      .select("lender_name, policy_name, policy_value, category, subcategory")
-      .limit(30);
+      .select("lender, policy, status, guideline, category")
+      .limit(25);
 
-    // Filter by lender if specified
     if (input.lender) {
-      dbQuery = dbQuery.ilike("lender_name", `%${String(input.lender)}%`);
+      guidelineQuery = guidelineQuery.ilike("lender", `%${String(input.lender)}%`);
     }
 
-    // Search across policy_name and policy_value
-    const orFilters = terms.map(t => `policy_name.ilike.%${t}%,policy_value.ilike.%${t}%,category.ilike.%${t}%`).join(",");
-    if (orFilters) {
-      dbQuery = dbQuery.or(orFilters);
+    // Build OR filter across policy and guideline columns
+    const orParts = terms.flatMap(t => [`policy.ilike.%${t}%`, `guideline.ilike.%${t}%`]);
+    if (orParts.length) {
+      guidelineQuery = guidelineQuery.or(orParts.join(","));
     }
 
-    const { data, error } = await dbQuery;
+    const { data: guidelines, error: gError } = await guidelineQuery;
 
-    if (error) return `FlowIQ search error: ${error.message}`;
-    if (!data?.length) {
-      // Fallback: try broader search
-      const { data: fallback } = await supabase
-        .from("lender_guidelines")
-        .select("lender_name, policy_name, policy_value, category")
-        .or(terms.slice(0, 2).map(t => `policy_value.ilike.%${t}%`).join(","))
-        .limit(20);
-
-      if (!fallback?.length) return `No lender guidelines found for "${query}". Try different keywords.`;
-
-      const lines = [`FLOWIQ RESULTS (${fallback.length}):\n`];
-      const byLender: Record<string, string[]> = {};
-      for (const r of fallback) {
-        const lender = String(r.lender_name || "Unknown");
+    if (gError) {
+      lines.push(`Guideline search error: ${gError.message}`);
+    } else if (guidelines?.length) {
+      // Group by lender
+      const byLender: Record<string, Array<Record<string, unknown>>> = {};
+      for (const r of guidelines) {
+        const lender = String(r.lender || "Unknown");
         if (!byLender[lender]) byLender[lender] = [];
-        byLender[lender].push(`  ${r.policy_name}: ${String(r.policy_value || "").slice(0, 150)}`);
+        byLender[lender].push(r);
       }
+
+      lines.push(`LENDER GUIDELINES (${guidelines.length} matches across ${Object.keys(byLender).length} lenders):\n`);
       for (const [lender, policies] of Object.entries(byLender)) {
         lines.push(`${lender}:`);
-        lines.push(...policies.slice(0, 5));
+        for (const p of policies.slice(0, 4)) {
+          const status = p.status === "Accepted" ? "YES" : p.status === "Not Accepted" ? "NO" : String(p.status || "?");
+          lines.push(`  [${status}] ${p.policy}`);
+          if (p.guideline) lines.push(`    ${String(p.guideline).slice(0, 200)}`);
+        }
+        if (policies.length > 4) lines.push(`  ...${policies.length - 4} more policies`);
+        lines.push("");
       }
-      return lines.join("\n");
+    } else {
+      lines.push(`No lender guidelines matched "${query}".`);
     }
 
-    const lines = [`FLOWIQ RESULTS (${data.length}):\n`];
-    const byLender: Record<string, string[]> = {};
-    for (const r of data) {
-      const lender = String(r.lender_name || "Unknown");
-      if (!byLender[lender]) byLender[lender] = [];
-      byLender[lender].push(`  ${r.policy_name}: ${String(r.policy_value || "").slice(0, 200)}`);
+    // 2. Also check insurer_rules (CMHC, Sagen, Canada Guaranty)
+    const insurerFilter = terms.map(t => `rule_text.ilike.%${t}%,rule_name.ilike.%${t}%`).join(",");
+    const { data: insurerRules } = await supabase
+      .from("insurer_rules")
+      .select("insurer, rule_name, rule_text, rule_category")
+      .or(insurerFilter)
+      .limit(10);
+
+    if (insurerRules?.length) {
+      lines.push(`\nINSURER RULES:`);
+      for (const r of insurerRules) {
+        lines.push(`${r.insurer} | ${r.rule_name}`);
+        lines.push(`  ${String(r.rule_text).slice(0, 200)}`);
+      }
     }
-    for (const [lender, policies] of Object.entries(byLender)) {
-      lines.push(`${lender}:`);
-      lines.push(...policies.slice(0, 5));
-      if (policies.length > 5) lines.push(`  ...${policies.length - 5} more`);
+
+    // 3. Also check underwriting_rules (B-20, stress test, etc.)
+    const uwFilter = terms.map(t => `rule_description.ilike.%${t}%,rule_name.ilike.%${t}%`).join(",");
+    const { data: uwRules } = await supabase
+      .from("underwriting_rules")
+      .select("rule_type, rule_name, rule_description, applies_to, source")
+      .or(uwFilter)
+      .limit(5);
+
+    if (uwRules?.length) {
+      lines.push(`\nUNDERWRITING RULES:`);
+      for (const r of uwRules) {
+        lines.push(`${r.rule_name} (${r.source || r.rule_type})`);
+        lines.push(`  ${String(r.rule_description).slice(0, 200)}`);
+        if (r.applies_to) lines.push(`  Applies to: ${Array.isArray(r.applies_to) ? r.applies_to.join(", ") : r.applies_to}`);
+      }
     }
+
+    if (!lines.length) return `No results for "${query}". Try: self-employed, rental, stated income, CMHC, high ratio, etc.`;
+
+    lines.push(`\nSource: FlowIQ (3,843 lender guidelines + insurer rules + B-20)`);
     return lines.join("\n");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
