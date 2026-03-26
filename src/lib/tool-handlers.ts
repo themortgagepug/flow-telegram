@@ -115,16 +115,46 @@ function resolveOwnerId(name: string): string {
 
 // === VALID DEAL STAGES ===
 
+// REAL Zoho stages (verified from live data)
 const VALID_STAGES = [
-  "Qualification",
-  "Pre-Approval",
-  "Submitted",
-  "Approved",
-  "Instructed",
-  "Funded",
-  "Complete",
-  "Lost",
+  "Lead Received",
+  "HOT (Contacted & App Sent)",
+  "Call Booked",
+  "Collecting Documentation",
+  "File Processed - Pending PS",
+  "Review Summary Commenced",
+  "File Review Complete - Clients Waiting",
+  "Rate Hold (Pre-App)",
+  "No Rate Hold (Pre-App)",
+  "Deal Submitted",
+  "Lender Approved / Pending Conditions",
+  "Deal Instructed",
+  "Broker Complete",
+  "Compliance Review Completed",
+  "Mortgage Closed",
+  "Fees Collected",
+  "Lost Deal",
+  "LOST LEAD",
+  "Long Term (On Hold)",
+  "Long Term - Approval - More than 4 Months to Close",
+  "Post RS Hold/Cold/Expired P/A Files",
+  "Hold/Cold Pre-RS",
+  "LT Renewals",
+  "Additional Properties",
 ];
+
+// Stage groups for reporting
+const ACTIVE_STAGES = [
+  "Lead Received", "HOT (Contacted & App Sent)", "Call Booked",
+  "Collecting Documentation", "File Processed - Pending PS",
+  "Review Summary Commenced", "File Review Complete - Clients Waiting",
+  "Rate Hold (Pre-App)", "No Rate Hold (Pre-App)",
+  "Deal Submitted", "Lender Approved / Pending Conditions",
+  "Deal Instructed", "Broker Complete", "Compliance Review Completed",
+];
+const FUNDED_STAGES = ["Mortgage Closed", "Fees Collected"];
+const LOST_STAGES = ["Lost Deal", "LOST LEAD"];
+const HOLD_STAGES = ["Long Term (On Hold)", "Long Term - Approval - More than 4 Months to Close", "Post RS Hold/Cold/Expired P/A Files", "Hold/Cold Pre-RS"];
 
 // === TOOL HANDLERS ===
 
@@ -1500,7 +1530,7 @@ async function ceoDashboard(): Promise<string> {
       "Modified_Time", "Created_Time", "Closing_Date",
       "Contact_Name", "Owner", "AMA",
       "Lender_Name", "ON_HOLD_Reason", "On_Hold_Reason_Notes",
-      "Date_of_Last_Email", "Funded_Date",
+      "Date_of_Last_Email", "Funded_Date", "Expected_Mortgage_Amount",
     ].join(",");
 
     const [dealsRes, tasksRes] = await Promise.all([
@@ -1520,31 +1550,33 @@ async function ceoDashboard(): Promise<string> {
 
     // 1. REVENUE PULSE
     const funded = deals.filter((d) => {
-      if (d.Stage !== "Funded" && d.Stage !== "Complete") return false;
-      const dateStr = String(d.Funded_Date || d.Closing_Date || d.Modified_Time || "");
-      return dateStr.startsWith(currentMonth);
+      const stage = String(d.Stage || "");
+      if (!FUNDED_STAGES.includes(stage)) return false;
+      const fd = String(d.Funded_Date || "");
+      return fd.startsWith(currentMonth);
     });
-    const fundedTotal = funded.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
+    const mortgageVolume = funded.reduce((sum, d) => sum + Number(d.Expected_Mortgage_Amount || d.Amount || 0), 0);
+    const commissionTotal = funded.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
     const dayOfMonth = new Date().getDate();
     const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
     const pace = dayOfMonth > 0 ? Math.round((funded.length / dayOfMonth) * daysInMonth) : 0;
+    const daysLeft = daysInMonth - dayOfMonth;
 
-    lines.push(`REVENUE: ${funded.length}/35 funded | $${fundedTotal.toLocaleString()} | Pace: ${pace}/mo`);
+    lines.push(`REVENUE: ${funded.length}/35 funded | $${mortgageVolume.toLocaleString()} volume | $${commissionTotal.toLocaleString()} commission | Pace: ${pace}/mo | ${daysLeft}d left`);
 
     // 2. PIPELINE SNAPSHOT
     const stageCounts: Record<string, { count: number; value: number }> = {};
-    const activeStages = ["Qualification", "Pre-Approval", "Submitted", "Approved", "Instructed"];
     for (const d of deals) {
       const stage = String(d.Stage || "");
-      if (!activeStages.includes(stage)) continue;
+      if (!ACTIVE_STAGES.includes(stage)) continue;
       if (!stageCounts[stage]) stageCounts[stage] = { count: 0, value: 0 };
       stageCounts[stage].count++;
-      stageCounts[stage].value += Number(d.Amount || 0);
+      stageCounts[stage].value += Number(d.Expected_Mortgage_Amount || d.Amount || 0);
     }
     const totalActive = Object.values(stageCounts).reduce((s, v) => s + v.count, 0);
     const totalValue = Object.values(stageCounts).reduce((s, v) => s + v.value, 0);
     lines.push(`\nPIPELINE: ${totalActive} active deals | $${totalValue.toLocaleString()}`);
-    for (const stage of activeStages) {
+    for (const stage of ACTIVE_STAGES) {
       const s = stageCounts[stage];
       if (s) lines.push(`  ${stage}: ${s.count} | $${s.value.toLocaleString()}`);
     }
@@ -1553,7 +1585,7 @@ async function ceoDashboard(): Promise<string> {
     const stuck: string[] = [];
     for (const d of deals) {
       const stage = String(d.Stage || "");
-      if (["Funded", "Complete", "Lost"].includes(stage)) continue;
+      if ([...FUNDED_STAGES, ...LOST_STAGES, ...HOLD_STAGES, "LT Renewals", "Additional Properties"].includes(stage)) continue;
       const modMs = d.Modified_Time ? new Date(String(d.Modified_Time)).getTime() : 0;
       const days = modMs > 0 ? Math.floor((now - modMs) / 86400000) : 0;
       if (days >= 5) {
@@ -1582,7 +1614,7 @@ async function ceoDashboard(): Promise<string> {
     }
 
     // 5. ON HOLD
-    const onHold = deals.filter((d) => String(d.Stage || "").includes("Hold"));
+    const onHold = deals.filter((d) => HOLD_STAGES.includes(String(d.Stage || "")));
     if (onHold.length) {
       lines.push(`\nON HOLD (${onHold.length}):`);
       for (const d of onHold.slice(0, 5)) {
@@ -1606,17 +1638,19 @@ async function ceoDashboard(): Promise<string> {
 
     // 7. BIGGEST DEALS IN PLAY
     const bigDeals = deals
-      .filter((d) => activeStages.includes(String(d.Stage || "")) && Number(d.Amount || 0) > 0)
-      .sort((a, b) => Number(b.Amount || 0) - Number(a.Amount || 0))
+      .filter((d) => ACTIVE_STAGES.includes(String(d.Stage || "")) && Number(d.Expected_Mortgage_Amount || d.Amount || 0) > 0)
+      .sort((a, b) => Number(b.Expected_Mortgage_Amount || b.Amount || 0) - Number(a.Expected_Mortgage_Amount || a.Amount || 0))
       .slice(0, 5);
     if (bigDeals.length) {
       lines.push(`\nBIGGEST DEALS IN PLAY:`);
       for (const d of bigDeals) {
-        lines.push(`  ${d.Deal_Name} | ${d.Stage} | $${Number(d.Amount || 0).toLocaleString()}${d.Lender_Name ? ` | ${d.Lender_Name}` : ""}`);
+        const mort = Number(d.Expected_Mortgage_Amount || d.Amount || 0);
+        lines.push(`  ${d.Deal_Name} | ${d.Stage} | $${mort.toLocaleString()}${d.Lender_Name ? ` | ${d.Lender_Name}` : ""}`);
       }
     }
 
-    lines.push(`\nWhat do you want to dig into?`);
+    lines.push(`\nData source: Zoho CRM live query (${deals.length} deals scanned)`);
+    lines.push(`What do you want to dig into?`);
     return lines.join("\n");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1634,9 +1668,9 @@ async function revenueDashboard(input: Record<string, unknown>): Promise<string>
     const daysInMonth = new Date(year, month, 0).getDate();
     const dayOfMonth = now.getMonth() + 1 === month && now.getFullYear() === year ? now.getDate() : daysInMonth;
 
-    // Fetch all deals
+    // Fetch deals with correct revenue fields
     const res = await zohoFetch(
-      `${ZOHO_API}/Deals?fields=Deal_Name,Stage,Amount,Modified_Time,Closing_Date,Funded_Date,Contact_Name&per_page=200&page=1`
+      `${ZOHO_API}/Deals?fields=Deal_Name,Stage,Amount,Expected_Mortgage_Amount,Funded_Date,Closing_Date,Contact_Name,Lender_Name,Deal_Type,Modified_Time&per_page=200&page=1`
     );
     const data = await res.json();
     if (!data.data?.length) return "No deals found in Zoho CRM.";
@@ -1644,20 +1678,29 @@ async function revenueDashboard(input: Record<string, unknown>): Promise<string>
     const deals = data.data as Record<string, unknown>[];
     const MONTHLY_TARGET = 35;
 
-    // Funded this month
+    // FUNDED this month = Stage "Mortgage Closed" or "Fees Collected" with Funded_Date in target month
     const funded = deals.filter((d) => {
-      if (d.Stage !== "Funded" && d.Stage !== "Complete") return false;
-      const dateStr = String(d.Funded_Date || d.Closing_Date || d.Modified_Time || "");
-      return dateStr.startsWith(targetMonth);
+      const stage = String(d.Stage || "");
+      if (!FUNDED_STAGES.includes(stage)) return false;
+      const fd = String(d.Funded_Date || "");
+      return fd.startsWith(targetMonth);
     });
-    const fundedTotal = funded.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
-    const avgDeal = funded.length > 0 ? fundedTotal / funded.length : 0;
 
-    // Projected closings (Approved + Instructed)
-    const projected = deals.filter((d) =>
-      d.Stage === "Approved" || d.Stage === "Instructed"
-    );
-    const projectedTotal = projected.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
+    // Amount = commission, Expected_Mortgage_Amount = mortgage volume
+    const commissionTotal = funded.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
+    const mortgageVolume = funded.reduce((sum, d) => sum + Number(d.Expected_Mortgage_Amount || 0), 0);
+    const avgMortgage = funded.length > 0 ? mortgageVolume / funded.length : 0;
+    const avgCommission = funded.length > 0 ? commissionTotal / funded.length : 0;
+
+    // Projected closings = Deal Instructed + Broker Complete + Compliance Review
+    const closeStages = ["Deal Instructed", "Broker Complete", "Compliance Review Completed"];
+    const projected = deals.filter((d) => closeStages.includes(String(d.Stage || "")));
+    const projectedMortgage = projected.reduce((sum, d) => sum + Number(d.Expected_Mortgage_Amount || 0), 0);
+    const projectedCommission = projected.reduce((sum, d) => sum + Number(d.Amount || 0), 0);
+
+    // In pipeline = Lender Approved + Deal Submitted
+    const pipeStages = ["Lender Approved / Pending Conditions", "Deal Submitted"];
+    const inPipe = deals.filter((d) => pipeStages.includes(String(d.Stage || "")));
 
     // Pace calculation
     const pace = dayOfMonth > 0 ? Math.round((funded.length / dayOfMonth) * daysInMonth) : 0;
@@ -1665,33 +1708,48 @@ async function revenueDashboard(input: Record<string, unknown>): Promise<string>
     const daysLeft = daysInMonth - dayOfMonth;
 
     const lines: string[] = [];
-    lines.push(`REVENUE DASHBOARD - ${targetMonth}\n`);
-    lines.push(`FUNDED: ${funded.length} deals | $${fundedTotal.toLocaleString()}`);
-    lines.push(`TARGET: ${MONTHLY_TARGET} deals`);
+    lines.push(`REVENUE - ${targetMonth} (VERIFIED FROM ZOHO)\n`);
+    lines.push(`FUNDED: ${funded.length} deals`);
+    lines.push(`  Mortgage volume: $${mortgageVolume.toLocaleString()}`);
+    lines.push(`  Commission: $${commissionTotal.toLocaleString()}`);
+    lines.push(`  Avg mortgage: $${Math.round(avgMortgage).toLocaleString()}`);
+    lines.push(`  Avg commission: $${Math.round(avgCommission).toLocaleString()}`);
+    lines.push(``);
+    lines.push(`TARGET: ${MONTHLY_TARGET} deals | ${remaining} to go | ${daysLeft} days left`);
     lines.push(`PACE: ${pace} projected at current rate`);
-    lines.push(`REMAINING: ${remaining} deals needed | ${daysLeft} days left`);
-    lines.push(`AVG DEAL: $${Math.round(avgDeal).toLocaleString()}`);
 
     if (projected.length) {
-      lines.push(`\nIN THE PIPE (Approved + Instructed):`);
-      lines.push(`${projected.length} deals | $${projectedTotal.toLocaleString()}`);
-      for (const d of projected.slice(0, 5)) {
-        const name = String(d.Deal_Name || "Unnamed");
-        const amt = d.Amount ? `$${Number(d.Amount).toLocaleString()}` : "N/A";
-        const stage = String(d.Stage);
-        lines.push(`  - ${name} | ${stage} | ${amt}`);
+      lines.push(`\nABOUT TO FUND (Instructed/Broker Complete/Compliance):`);
+      lines.push(`  ${projected.length} deals | $${projectedMortgage.toLocaleString()} mortgage | $${projectedCommission.toLocaleString()} commission`);
+      for (const d of projected) {
+        const name = String(d.Deal_Name || "?").replace("FLOW - ", "");
+        const mort = Number(d.Expected_Mortgage_Amount || 0);
+        const comm = Number(d.Amount || 0);
+        lines.push(`  - ${name} | $${mort.toLocaleString()} | comm $${comm.toLocaleString()}${d.Lender_Name ? ` | ${d.Lender_Name}` : ""}`);
+      }
+    }
+
+    if (inPipe.length) {
+      lines.push(`\nIN UNDERWRITING (Submitted/Lender Approved):`);
+      lines.push(`  ${inPipe.length} deals`);
+      for (const d of inPipe.slice(0, 8)) {
+        const name = String(d.Deal_Name || "?").replace("FLOW - ", "");
+        const mort = Number(d.Expected_Mortgage_Amount || 0);
+        lines.push(`  - ${name} | $${mort.toLocaleString()} | ${d.Stage}${d.Lender_Name ? ` | ${d.Lender_Name}` : ""}`);
       }
     }
 
     if (funded.length > 0) {
       lines.push(`\nFUNDED THIS MONTH:`);
-      for (const d of funded.slice(0, 10)) {
-        const name = String(d.Deal_Name || "Unnamed");
-        const amt = d.Amount ? `$${Number(d.Amount).toLocaleString()}` : "N/A";
-        lines.push(`  - ${name} | ${amt}`);
+      for (const d of funded) {
+        const name = String(d.Deal_Name || "?").replace("FLOW - ", "");
+        const mort = Number(d.Expected_Mortgage_Amount || 0);
+        const comm = Number(d.Amount || 0);
+        lines.push(`  - ${name} | $${mort.toLocaleString()} | comm $${comm.toLocaleString()} | ${d.Funded_Date}${d.Lender_Name ? ` | ${d.Lender_Name}` : ""}`);
       }
     }
 
+    lines.push(`\nData source: Zoho CRM live query (${deals.length} deals scanned)`);
     return lines.join("\n");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
