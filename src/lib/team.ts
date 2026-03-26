@@ -16,8 +16,7 @@ const ALLOWED_USERS: Record<string, TeamMember> = {
 
 // Numeric Telegram IDs (more reliable than usernames)
 const ALLOWED_IDS: Record<number, TeamMember> = {
-  // Alex's ID will be captured on first /start
-  // Add like: 123456789: { name: "Alex", role: "admin", agents: ["*"] }
+  7544938550: { name: "Alex", role: "admin", agents: ["property", "cx", "rates", "pipeline", "content", "general"] },
 };
 
 // ADMIN OVERRIDE: First message from any user gets through during setup phase
