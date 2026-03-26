@@ -11,8 +11,7 @@ export type TeamMember = {
 // After someone messages the bot, they'll see their user ID
 // Add their username OR numeric ID below
 const ALLOWED_USERS: Record<string, TeamMember> = {
-  // By username (lowercase, no @)
-  // Alex will need to add his username after first /start
+  themortgagepug: { name: "Alex", role: "admin", agents: ["property", "cx", "rates", "pipeline", "content", "general"] },
 };
 
 // Numeric Telegram IDs (more reliable than usernames)

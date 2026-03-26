@@ -455,6 +455,61 @@ export const TOOLS = [
     },
   },
 
+  // === FLOWIQ - LENDER GUIDELINE SEARCH ===
+  {
+    name: "flowiq_search",
+    description:
+      "Search FlowIQ's lender guideline database (3,843 rules across 58 lenders). Use when Alex asks 'can I do this deal?', 'which lender for self-employed?', 'who does 90% LTV rental?', 'CMHC rules for X', or any lender/guideline/product question. This is the AI underwriting brain.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural language question about lender guidelines, products, or deal feasibility. E.g. 'self-employed 90% LTV purchase' or 'which lenders do stated income?' or 'CMHC rental rules'",
+        },
+        lender: {
+          type: "string",
+          description: "Filter to specific lender name (optional)",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  // === CALL INTELLIGENCE ===
+  {
+    name: "call_intelligence",
+    description:
+      "Search call transcripts and extracted opportunities from client/partner calls. Use when Alex asks about a specific client conversation, wants to know what was discussed, or asks about cross-sell/referral opportunities. 68 transcripts with AI-extracted insights, 1,148 flagged opportunities.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Search term: client name, topic, or keyword",
+        },
+        type: {
+          type: "string",
+          enum: ["transcripts", "opportunities", "both"],
+          description: "Search transcripts, opportunities, or both (default: both)",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  // === OBJECTION TRENDS ===
+  {
+    name: "objection_trends",
+    description:
+      "Get current client objection trends extracted from call transcripts. Shows what clients are worried about right now -- rate anxiety, affordability, market fear, process complexity, timing. Use when Alex asks 'what are clients saying?', 'what objections are we hearing?', 'market sentiment', or for content/coaching ideas.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+
   // === CEO INTEL ===
   {
     name: "ceo_dashboard",

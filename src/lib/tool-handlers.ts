@@ -165,6 +165,12 @@ export async function handleToolCall(name: string, input: Record<string, unknown
         return await getDailyBriefing(input);
       case "query_brain":
         return await queryBrain(input);
+      case "flowiq_search":
+        return await flowiqSearch(input);
+      case "call_intelligence":
+        return await callIntelligence(input);
+      case "objection_trends":
+        return await objectionTrends();
       case "ceo_dashboard":
         return await ceoDashboard();
       case "revenue_dashboard":
@@ -1271,6 +1277,175 @@ async function generatePreapproval(input: Record<string, unknown>): Promise<stri
     (input.property_address ? `Property: ${input.property_address}\n` : "") +
     `\nTo generate the PDF, use the Pre-Approval button in Zoho CRM, or I can trigger it once the deal is in the system.`
   );
+}
+
+// === FLOWIQ - LENDER GUIDELINE SEARCH ===
+
+async function flowiqSearch(input: Record<string, unknown>): Promise<string> {
+  const query = String(input.query || "").trim();
+  if (!query) return "Need a query. E.g. 'self-employed 90% LTV purchase' or 'which lenders do stated income?'";
+
+  try {
+    // Search lender_guidelines table with text matching
+    const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+    let dbQuery = supabase
+      .from("lender_guidelines")
+      .select("lender_name, policy_name, policy_value, category, subcategory")
+      .limit(30);
+
+    // Filter by lender if specified
+    if (input.lender) {
+      dbQuery = dbQuery.ilike("lender_name", `%${String(input.lender)}%`);
+    }
+
+    // Search across policy_name and policy_value
+    const orFilters = terms.map(t => `policy_name.ilike.%${t}%,policy_value.ilike.%${t}%,category.ilike.%${t}%`).join(",");
+    if (orFilters) {
+      dbQuery = dbQuery.or(orFilters);
+    }
+
+    const { data, error } = await dbQuery;
+
+    if (error) return `FlowIQ search error: ${error.message}`;
+    if (!data?.length) {
+      // Fallback: try broader search
+      const { data: fallback } = await supabase
+        .from("lender_guidelines")
+        .select("lender_name, policy_name, policy_value, category")
+        .or(terms.slice(0, 2).map(t => `policy_value.ilike.%${t}%`).join(","))
+        .limit(20);
+
+      if (!fallback?.length) return `No lender guidelines found for "${query}". Try different keywords.`;
+
+      const lines = [`FLOWIQ RESULTS (${fallback.length}):\n`];
+      const byLender: Record<string, string[]> = {};
+      for (const r of fallback) {
+        const lender = String(r.lender_name || "Unknown");
+        if (!byLender[lender]) byLender[lender] = [];
+        byLender[lender].push(`  ${r.policy_name}: ${String(r.policy_value || "").slice(0, 150)}`);
+      }
+      for (const [lender, policies] of Object.entries(byLender)) {
+        lines.push(`${lender}:`);
+        lines.push(...policies.slice(0, 5));
+      }
+      return lines.join("\n");
+    }
+
+    const lines = [`FLOWIQ RESULTS (${data.length}):\n`];
+    const byLender: Record<string, string[]> = {};
+    for (const r of data) {
+      const lender = String(r.lender_name || "Unknown");
+      if (!byLender[lender]) byLender[lender] = [];
+      byLender[lender].push(`  ${r.policy_name}: ${String(r.policy_value || "").slice(0, 200)}`);
+    }
+    for (const [lender, policies] of Object.entries(byLender)) {
+      lines.push(`${lender}:`);
+      lines.push(...policies.slice(0, 5));
+      if (policies.length > 5) lines.push(`  ...${policies.length - 5} more`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `FlowIQ search error: ${msg}`;
+  }
+}
+
+// === CALL INTELLIGENCE ===
+
+async function callIntelligence(input: Record<string, unknown>): Promise<string> {
+  const query = String(input.query || "").trim();
+  if (!query) return "Need a search term (client name, topic, keyword).";
+  const searchType = String(input.type || "both");
+
+  const lines: string[] = [];
+
+  try {
+    // Search transcripts
+    if (searchType === "transcripts" || searchType === "both") {
+      const { data: transcripts } = await supabase
+        .from("call_transcripts")
+        .select("id, date, source, client_name, call_type, summary, key_topics, action_items, sentiment")
+        .or(`client_name.ilike.%${query}%,summary.ilike.%${query}%,key_topics.ilike.%${query}%`)
+        .order("date", { ascending: false })
+        .limit(5);
+
+      if (transcripts?.length) {
+        lines.push(`CALL TRANSCRIPTS (${transcripts.length}):\n`);
+        for (const t of transcripts) {
+          lines.push(`${t.date || "?"} | ${t.client_name || "Unknown"} | ${t.call_type || "?"} | ${t.source || "?"}`);
+          if (t.summary) lines.push(`  Summary: ${String(t.summary).slice(0, 200)}`);
+          if (t.key_topics) lines.push(`  Topics: ${t.key_topics}`);
+          if (t.action_items) lines.push(`  Actions: ${String(t.action_items).slice(0, 150)}`);
+          if (t.sentiment) lines.push(`  Sentiment: ${t.sentiment}`);
+          lines.push("");
+        }
+      }
+    }
+
+    // Search opportunities
+    if (searchType === "opportunities" || searchType === "both") {
+      const { data: opps } = await supabase
+        .from("opportunities")
+        .select("id, type, description, client_name, confidence, status, created_at")
+        .or(`client_name.ilike.%${query}%,description.ilike.%${query}%,type.ilike.%${query}%`)
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (opps?.length) {
+        lines.push(`OPPORTUNITIES (${opps.length}):\n`);
+        for (const o of opps) {
+          const conf = o.confidence ? ` | ${Math.round(Number(o.confidence) * 100)}% confidence` : "";
+          lines.push(`${o.type || "?"} | ${o.client_name || "?"} | ${o.status || "open"}${conf}`);
+          if (o.description) lines.push(`  ${String(o.description).slice(0, 200)}`);
+          lines.push("");
+        }
+      }
+    }
+
+    if (!lines.length) return `No call transcripts or opportunities found for "${query}".`;
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Call intelligence error: ${msg}`;
+  }
+}
+
+// === OBJECTION TRENDS ===
+
+async function objectionTrends(): Promise<string> {
+  try {
+    // Pull objection data from brain table
+    const { data } = await supabase
+      .from("brain")
+      .select("topic, content")
+      .eq("category", "content")
+      .ilike("topic", "%Objection%");
+
+    if (!data?.length) return "No objection trend data found in brain.";
+
+    const lines = [`CLIENT OBJECTION TRENDS (from call transcripts):\n`];
+    for (const row of data) {
+      const topic = String(row.topic || "").replace("Objection Trend: ", "").toUpperCase();
+      const content = String(row.content || "");
+      // Extract mentions count and key quotes
+      const mentionsMatch = content.match(/Mentions: (\d+)/);
+      const mentions = mentionsMatch ? mentionsMatch[1] : "?";
+      // Get first few client quotes
+      const quotes = content.match(/"([^"]{10,80})"/g)?.slice(0, 3) || [];
+
+      lines.push(`${topic} (${mentions} mentions)`);
+      for (const q of quotes) {
+        lines.push(`  ${q}`);
+      }
+      lines.push("");
+    }
+
+    lines.push("Use these for content ideas, sales coaching, or to prep for common client concerns.");
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Objection trends error: ${msg}`;
+  }
 }
 
 // === CEO DASHBOARD ===
