@@ -195,6 +195,10 @@ export async function handleToolCall(name: string, input: Record<string, unknown
         return await getDailyBriefing(input);
       case "query_brain":
         return await queryBrain(input);
+      case "generate_short_form_scripts":
+        return await generateShortFormScripts(input);
+      case "generate_hooks":
+        return await generateHooks(input);
       case "flowiq_search":
         return await flowiqSearch(input);
       case "call_intelligence":
@@ -1350,6 +1354,91 @@ async function generatePreapproval(input: Record<string, unknown>): Promise<stri
     (input.property_address ? `Property: ${input.property_address}\n` : "") +
     `\nTo generate the PDF, use the Pre-Approval button in Zoho CRM, or I can trigger it once the deal is in the system.`
   );
+}
+
+// === SHORT-FORM VIDEO GENERATION ===
+
+const SHORT_FORM_SYSTEM = `You are a short-form video script writer for @TheMortgagePug (Alex McFadyen, Canadian mortgage broker).
+
+VOICE: Write how Alex talks on camera. Contractions. Short sentences. Direct. "War Room" energy - he's in the middle of real deals, not teaching from a whiteboard. Raw > polished. Provocative when data supports it.
+
+7 MAGNETIC HOOK TYPES (tag every hook):
+1. Controversial Truth: "Everything you know about [X] is outdated"
+2. Specific Transformation: "How [situation] led to [discovery] using [method]"
+3. Costly Mistake: "This [practice] creates [problem]. Here's what to do instead"
+4. Insider Secret: "What [industry] pros know about [X] that others don't"
+5. Pattern Interrupt: "Yesterday I did [unexpected thing]. Here's what happened"
+6. Counterintuitive Method: "Why the opposite approach might work better"
+7. Future Preparation: "[Industry] is evolving. Here's how to stay ahead"
+
+FORMATS (use variety):
+- Rate Reaction (green screen over news article, 45-60s)
+- Data Reveal (shocking number fills screen, 30-50s)
+- Pug + Pivot (Chewie scroll-stop then mortgage education, 25-35s)
+- Two-Character/POV (quick cuts between roles, 30-45s)
+- Myth Destroyer (myth -> data -> counter-position, 30-45s)
+- Silent Film (no talking, music + text cards, 30-60s)
+- Story/Lesson/Offer SLO (client scenario -> lesson -> CTA, 40-50s)
+
+RULES:
+- Triple Hook Stack: VISUAL + TEXT (1-7 words on screen) + VERBAL in first 3 seconds
+- Negative framing outperforms positive (+46,000 views)
+- One video = one idea. Never cram multiple lessons.
+- Every video has a comment-keyword CTA
+- Data first. Every claim has a number.
+- Translate jargon: "rates dropped 275bps" -> "$500K mortgage costs $X/mo less"
+- Canadian market, vary cities (Calgary, Vancouver, Toronto, GTA, Fraser Valley) - NEVER Kelowna
+- No em dashes. No "don't miss out" / "act fast" / "as a trusted professional"
+
+CTA KEYWORDS: RATES, RENEW, SAVE, FIRST, QUALIFY, MATH, PUG, READY, BLEND, LETTER, TRUTH, PREPARE
+
+4 BUCKETS: Rates & Market Intel, Homebuyer Education, Mortgage Myths Busted, The Pug Life
+7 STYLES: Rant, Q&A, How-To, SLO, Winners or Losers, Case Study, Myth-Bust`;
+
+async function generateShortFormScripts(input: Record<string, unknown>): Promise<string> {
+  const topic = String(input.topic || "").trim();
+  if (!topic) return "Need a topic. E.g. 'rate drops', 'self-employed', 'renewal letters', 'first time buyers'";
+
+  const count = Number(input.count || 5);
+
+  return `GENERATE ${count} SHORT-FORM VIDEO SCRIPTS for @TheMortgagePug on: "${topic}"
+
+${SHORT_FORM_SYSTEM}
+
+For each script provide:
+1. Title
+2. Format + Bucket + Style + Duration
+3. Hook Type (from 7 Magnetic Types)
+4. Triple Hook Stack (VISUAL / TEXT / VERBAL)
+5. Script with timing cues (HOOK 0-3s, BODY, CTA)
+6. CTA Keyword
+7. Filming notes (location, props, Chewie involvement)
+
+Use DIFFERENT formats for each script. Prioritize variety.
+Make each script filmable with just an iPhone.
+Write the way Alex talks - not the way a content strategist writes.`;
+}
+
+async function generateHooks(input: Record<string, unknown>): Promise<string> {
+  const topic = String(input.topic || "").trim();
+  if (!topic) return "Need a topic. E.g. 'renewal letters', 'bank vs broker', 'first time buyers'";
+
+  return `GENERATE 10 HOOKS for rapid testing on: "${topic}"
+
+${SHORT_FORM_SYSTEM}
+
+Generate 10 hooks - at least one from EACH of the 7 Magnetic Hook Types, plus 3 extras from whichever types fit best.
+
+For each hook provide:
+- # (1-10)
+- The hook text (written in Alex's voice)
+- Magnetic Hook Type
+- Screen text (1-7 words for on-screen overlay)
+- Content bucket (Rates / Education / Myths / Pug Life)
+
+Then recommend the TOP 3 hooks with reasoning.
+
+Test plan: Film top 3 as trial reels (15-20 seconds: hook + one beat + CTA). Measure 3-second retention. Winner gets full script.`;
 }
 
 // === FLOWIQ - LENDER GUIDELINE SEARCH ===

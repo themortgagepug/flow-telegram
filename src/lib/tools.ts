@@ -586,6 +586,42 @@ export const TOOLS = [
     },
   },
 
+  // === SHORT-FORM VIDEO ===
+  {
+    name: "generate_short_form_scripts",
+    description:
+      "Generate 5 short-form video scripts (IG Reels/TikTok/YT Shorts) for @TheMortgagePug on a given topic. Scripts are research-informed, use the 7 Magnetic Hook Types, and match Alex's voice. Use when Alex says 'give me scripts about', 'short form on', 'reels about', 'content about', or any video script request.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        topic: {
+          type: "string",
+          description: "The topic to generate scripts for (e.g. 'rate drops', 'self-employed', 'renewal letters', 'first time buyers')",
+        },
+        count: {
+          type: "number",
+          description: "Number of scripts (default 5)",
+        },
+      },
+      required: ["topic"],
+    },
+  },
+  {
+    name: "generate_hooks",
+    description:
+      "Generate 10 hooks for rapid testing on a topic. Each hook maps to a Magnetic Hook Type with screen text. Use when Alex says 'hooks for', 'hook ideas', 'hook pack', or wants to test hooks before filming.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        topic: {
+          type: "string",
+          description: "Topic to generate hooks for",
+        },
+      },
+      required: ["topic"],
+    },
+  },
+
   // === KNOWLEDGE BASE ===
   {
     name: "query_brain",

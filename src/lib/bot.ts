@@ -305,6 +305,8 @@ Agents:
 Actions:
 /lead - Quick lead intake (screenshot, voice, or text)
 /partner - Process partner call (paste notes, get follow-up email)
+/shortform <topic> - 5 video scripts for Reels/TikTok
+/shortform hook <topic> - 10 hooks for testing
 /briefing - Full daily briefing
 /status - Quick status
 /task [description] - Create a task
@@ -371,6 +373,32 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
       const partResult = await handleToolCall("partner_intelligence", { mode: "followup_suggestions" });
       await sendMessage(token, chatId, partResult);
       return true;
+    }
+
+    case "/shortform": {
+      userAgents[userId] = "content";
+      const sfText = text.replace(/^\/shortform\s*/i, "").trim();
+      if (!sfText) {
+        await sendMessage(token, chatId,
+          `Short-form video scripts. Options:\n\n` +
+          `/shortform <topic> - 5 scripts on a topic\n` +
+          `/shortform hook <topic> - 10 hooks for testing\n\n` +
+          `Examples:\n` +
+          `"shortform rate drops"\n` +
+          `"shortform hook renewal letters"\n` +
+          `"give me reels about self-employed"\n\n` +
+          `Or just describe what you want.`
+        );
+        return true;
+      }
+      // Check if it's a hook request
+      const hookMatch = sfText.match(/^hooks?\s+(.+)/i);
+      if (hookMatch) {
+        message.text = `Generate 10 hooks for rapid testing on: ${hookMatch[1]}. Use the generate_hooks tool.`;
+      } else {
+        message.text = `Generate 5 short-form video scripts for @TheMortgagePug on: ${sfText}. Use the generate_short_form_scripts tool.`;
+      }
+      return false;
     }
 
     case "/calc": {

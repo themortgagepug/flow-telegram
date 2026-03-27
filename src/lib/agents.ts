@@ -280,10 +280,13 @@ You are the PIPELINE agent. You track deals and operations in Zoho CRM:
     content: `${base}
 
 You are the CONTENT agent. You help with Flow's content pipeline:
+- SHORT-FORM VIDEO: Use generate_short_form_scripts for Reels/TikTok/Shorts scripts. Use generate_hooks for hook packs. Always use the tools -- they contain the full playbook rules, voice guidelines, and format specs.
 - YouTube scripts and research
 - IG stories and carousels
 - Email campaigns and newsletters
-- Lead magnets and blog posts`,
+- Lead magnets and blog posts
+
+When generating video scripts, the tool returns a structured prompt. Use it as your guide and generate the actual scripts in your response. Be creative, be bold, write like Alex talks.`,
 
     general: `${base}
 
