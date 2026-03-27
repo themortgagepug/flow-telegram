@@ -1397,48 +1397,138 @@ CTA KEYWORDS: RATES, RENEW, SAVE, FIRST, QUALIFY, MATH, PUG, READY, BLEND, LETTE
 
 async function generateShortFormScripts(input: Record<string, unknown>): Promise<string> {
   const topic = String(input.topic || "").trim();
-  if (!topic) return "Need a topic. E.g. 'rate drops', 'self-employed', 'renewal letters', 'first time buyers'";
+  if (!topic) return "Need a topic. Anything -- mortgage, business, personal brand, industry trends, whatever you want to create about.";
 
   const count = Number(input.count || 5);
+
+  // Pull real data to inform scripts
+  const dataContext: string[] = [];
+
+  // 1. Check brain for objection trends and content intelligence
+  try {
+    const { data: objections } = await supabase
+      .from("brain")
+      .select("topic, content")
+      .eq("category", "content");
+    if (objections?.length) {
+      const relevant = objections.filter((o: Record<string, unknown>) =>
+        String(o.content || "").toLowerCase().includes(topic.toLowerCase()) ||
+        String(o.topic || "").toLowerCase().includes(topic.toLowerCase())
+      );
+      if (relevant.length) {
+        dataContext.push("OBJECTION/TREND DATA (from real client calls):");
+        for (const o of relevant.slice(0, 3)) {
+          dataContext.push(String(o.content || "").slice(0, 300));
+        }
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // 2. Check call transcripts for real client language on this topic
+  try {
+    const { data: transcripts } = await supabase
+      .from("call_transcripts")
+      .select("summary, key_topics")
+      .or(`summary.ilike.%${topic}%,key_topics.ilike.%${topic}%`)
+      .limit(3);
+    if (transcripts?.length) {
+      dataContext.push("\nREAL CLIENT CONVERSATIONS (from call transcripts):");
+      for (const t of transcripts) {
+        if (t.summary) dataContext.push(`- ${String(t.summary).slice(0, 200)}`);
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // 3. Check opportunities for cross-sell angles
+  try {
+    const { data: opps } = await supabase
+      .from("opportunities")
+      .select("type, description")
+      .ilike("description", `%${topic}%`)
+      .limit(3);
+    if (opps?.length) {
+      dataContext.push("\nOPPORTUNITIES SPOTTED IN CALLS:");
+      for (const o of opps) {
+        dataContext.push(`- ${o.type}: ${String(o.description).slice(0, 150)}`);
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  const researchBlock = dataContext.length > 0
+    ? `\n\nRESEARCH DATA TO INFORM SCRIPTS (use these real insights, real language, real pain points):\n${dataContext.join("\n")}`
+    : "\n\nNo specific research data found for this topic. Use your knowledge of the Canadian mortgage market and Alex's voice.";
 
   return `GENERATE ${count} SHORT-FORM VIDEO SCRIPTS for @TheMortgagePug on: "${topic}"
 
 ${SHORT_FORM_SYSTEM}
+${researchBlock}
+
+IMPORTANT:
+- Scripts should be about "${topic}" specifically -- this could be mortgage, business, personal brand, industry commentary, or anything Alex wants to create about
+- Use REAL data, real client language, real pain points from the research above where available
+- Every script must be filmable with just an iPhone
+- Use DIFFERENT formats for each script
+- Write the way Alex talks on camera -- not like a copywriter
 
 For each script provide:
-1. Title
-2. Format + Bucket + Style + Duration
-3. Hook Type (from 7 Magnetic Types)
-4. Triple Hook Stack (VISUAL / TEXT / VERBAL)
-5. Script with timing cues (HOOK 0-3s, BODY, CTA)
-6. CTA Keyword
-7. Filming notes (location, props, Chewie involvement)
-
-Use DIFFERENT formats for each script. Prioritize variety.
-Make each script filmable with just an iPhone.
-Write the way Alex talks - not the way a content strategist writes.`;
+1. TITLE
+2. FORMAT + BUCKET + STYLE + DURATION
+3. HOOK TYPE (which of the 7 Magnetic Hook Types)
+4. TRIPLE HOOK STACK:
+   - VISUAL (what they see)
+   - TEXT (1-7 words on screen)
+   - VERBAL (what Alex says)
+5. FULL SCRIPT with timing cues (HOOK 0-3s, GAP, BEATS, PAYOFF, CTA)
+6. CTA KEYWORD
+7. FILMING NOTES (setup, props, Chewie?)
+8. WHY THIS WORKS (the principle -- what makes this not generic)`;
 }
 
 async function generateHooks(input: Record<string, unknown>): Promise<string> {
   const topic = String(input.topic || "").trim();
-  if (!topic) return "Need a topic. E.g. 'renewal letters', 'bank vs broker', 'first time buyers'";
+  if (!topic) return "Need a topic -- anything you want hooks for.";
+
+  // Pull relevant data
+  const dataContext: string[] = [];
+  try {
+    const { data: objections } = await supabase
+      .from("brain")
+      .select("content")
+      .eq("category", "content")
+      .or(`content.ilike.%${topic}%`);
+    if (objections?.length) {
+      dataContext.push("REAL CLIENT LANGUAGE ON THIS TOPIC:");
+      // Extract actual client quotes
+      for (const o of objections.slice(0, 2)) {
+        const quotes = String(o.content || "").match(/"([^"]{10,80})"/g)?.slice(0, 5) || [];
+        dataContext.push(...quotes);
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  const researchBlock = dataContext.length > 0
+    ? `\n\nUSE THESE REAL CLIENT QUOTES/PAIN POINTS:\n${dataContext.join("\n")}`
+    : "";
 
   return `GENERATE 10 HOOKS for rapid testing on: "${topic}"
 
 ${SHORT_FORM_SYSTEM}
+${researchBlock}
 
-Generate 10 hooks - at least one from EACH of the 7 Magnetic Hook Types, plus 3 extras from whichever types fit best.
+Generate 10 hooks - at least one from EACH of the 7 Magnetic Hook Types, plus 3 extras.
 
-For each hook provide:
+For each hook:
 - # (1-10)
-- The hook text (written in Alex's voice)
+- Hook text (Alex's voice -- raw, direct, conversational)
 - Magnetic Hook Type
-- Screen text (1-7 words for on-screen overlay)
-- Content bucket (Rates / Education / Myths / Pug Life)
+- Screen text (1-7 words)
+- Bucket (Rates / Education / Myths / Pug Life / Personal Brand)
 
-Then recommend the TOP 3 hooks with reasoning.
+IMPORTANT: Use real data and real client language where available. Hooks based on ACTUAL pain points from calls outperform generic hooks.
 
-Test plan: Film top 3 as trial reels (15-20 seconds: hook + one beat + CTA). Measure 3-second retention. Winner gets full script.`;
+Recommend TOP 3 with reasoning.
+
+Test plan: Film top 3 as trial reels (15-20s: hook + one beat + CTA). Measure 3-second retention. Winner gets full script.`;
 }
 
 // === FLOWIQ - LENDER GUIDELINE SEARCH ===
