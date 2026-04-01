@@ -108,17 +108,17 @@ export async function handleMessage(message: TelegramMessage, token: string) {
       const audioRes = await fetch(fileUrl);
       const audioBuffer = await audioRes.arrayBuffer();
 
-      // Use OpenAI Whisper API for transcription (or fallback)
-      const whisperKey = process.env.OPENAI_API_KEY;
-      if (whisperKey) {
+      // Use Groq Whisper API for transcription (free tier, fast)
+      const groqKey = process.env.GROQ_API_KEY;
+      if (groqKey) {
         const formData = new FormData();
         const audioBlob = new Blob([audioBuffer], { type: message.voice.mime_type || "audio/ogg" });
         formData.append("file", audioBlob, "voice.ogg");
-        formData.append("model", "whisper-1");
+        formData.append("model", "whisper-large-v3");
 
-        const whisperRes = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        const whisperRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
           method: "POST",
-          headers: { Authorization: `Bearer ${whisperKey}` },
+          headers: { Authorization: `Bearer ${groqKey}` },
           body: formData,
         });
         const whisperData = await whisperRes.json() as { text?: string };
@@ -131,7 +131,7 @@ export async function handleMessage(message: TelegramMessage, token: string) {
       } else {
         messageContent.push({
           type: "text",
-          text: "Voice notes require OpenAI API key for transcription. Please type your message instead, or send a screenshot.",
+          text: "Voice notes require Groq API key for transcription. Please type your message instead, or send a screenshot.",
         });
       }
     } catch (e) {
