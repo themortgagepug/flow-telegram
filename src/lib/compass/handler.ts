@@ -6,6 +6,7 @@ import { sendMessage, sendTypingAction } from "../telegram";
 import { chatWithClaude } from "../claude";
 import { COMPASS_SYSTEM_PROMPT } from "./persona";
 import { loadCompassHistory, appendCompassMessage } from "./memory";
+import { buildCompassContext } from "./context";
 
 interface TelegramMessage {
   message_id: number;
@@ -56,6 +57,7 @@ Ask the question. I'll answer with a frame named.`,
       `Coach commands:
 
 /brief -- on-demand wakeup-style brief
+/state -- raw live business state (debug)
 /frame <hormozi|martell|ballantyne|buffett|priestley|pg|dunford|naval> <question> -- force a specific frame
 /help -- this
 
@@ -64,13 +66,28 @@ Or just talk to me. State the situation, I commit to one move.`,
     return;
   }
 
+  if (text === "/state") {
+    await sendTypingAction(token, chatId);
+    const ctx = await buildCompassContext();
+    const safe = ctx.length > 4000 ? ctx.slice(0, 3990) + "\n…" : ctx;
+    await sendMessage(token, chatId, safe);
+    return;
+  }
+
   await sendTypingAction(token, chatId);
 
-  const history = await loadCompassHistory(userId);
+  // Pull live business context in parallel with history load.
+  const [history, liveContext] = await Promise.all([
+    loadCompassHistory(userId),
+    buildCompassContext(),
+  ]);
+
   await appendCompassMessage(userId, "user", text);
 
+  const composedSystem = `${COMPASS_SYSTEM_PROMPT}\n\n${liveContext}`;
+
   const reply = await chatWithClaude({
-    systemPrompt: COMPASS_SYSTEM_PROMPT,
+    systemPrompt: composedSystem,
     userMessage: text,
     history,
   });
