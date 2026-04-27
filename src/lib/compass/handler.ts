@@ -3,7 +3,7 @@
 // conversation in compass_threads.
 
 import { sendMessage, sendTypingAction } from "../telegram";
-import { chatWithClaude } from "../claude";
+import { compassChat } from "./claude-direct";
 import { COMPASS_SYSTEM_PROMPT } from "./persona";
 import { loadCompassHistory, appendCompassMessage } from "./memory";
 import { buildCompassContext } from "./context";
@@ -77,20 +77,32 @@ Or just talk to me. State the situation, I commit to one move.`,
   await sendTypingAction(token, chatId);
 
   // Pull live business context in parallel with history load.
-  const [history, liveContext] = await Promise.all([
+  // If context fetch fails we still answer with the persona alone.
+  const [history, liveContextResult] = await Promise.all([
     loadCompassHistory(userId),
-    buildCompassContext(),
+    buildCompassContext().catch((e) => `(context fetch failed: ${e instanceof Error ? e.message : String(e)})`),
   ]);
+  const liveContext = typeof liveContextResult === "string" ? liveContextResult : String(liveContextResult);
 
   await appendCompassMessage(userId, "user", text);
 
   const composedSystem = `${COMPASS_SYSTEM_PROMPT}\n\n${liveContext}`;
 
-  const reply = await chatWithClaude({
+  const reply = await compassChat({
     systemPrompt: composedSystem,
     userMessage: text,
     history,
   });
+
+  if (reply.error) {
+    console.error("[Compass] chat error:", reply.error);
+    await sendMessage(
+      token,
+      chatId,
+      `Coach hit an error: ${reply.error.slice(0, 300)}`,
+    );
+    return;
+  }
 
   const finalText = reply.text || "No reply generated. Try rephrasing.";
 
