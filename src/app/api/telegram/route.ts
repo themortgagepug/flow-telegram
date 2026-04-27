@@ -2,18 +2,20 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 import { NextRequest, NextResponse } from "next/server";
+import { handleMessage } from "@/lib/bot";
 
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
-const INTERNAL_SECRET = process.env.TELEGRAM_BOT_TOKEN || "internal";
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 
 export async function POST(req: NextRequest) {
-  // Verify webhook secret (skip if not set)
+  console.log("[Route] POST received");
+
   const secret = req.headers.get("x-telegram-bot-api-secret-token");
   if (WEBHOOK_SECRET && secret !== WEBHOOK_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!process.env.TELEGRAM_BOT_TOKEN) {
+  if (!TELEGRAM_BOT_TOKEN) {
     console.error("[Route] TELEGRAM_BOT_TOKEN is empty!");
     return NextResponse.json({ error: "Bot token not configured" }, { status: 500 });
   }
@@ -26,21 +28,36 @@ export async function POST(req: NextRequest) {
   }
 
   const message = update.message as Record<string, unknown> | undefined;
-  if (!message) return NextResponse.json({ ok: true });
+  if (!message) {
+    console.log("[Route] No message in update");
+    return NextResponse.json({ ok: true });
+  }
 
-  // Fire-and-forget to the process endpoint (separate invocation with its own 60s)
-  const host = req.headers.get("host") || "flow-telegram-pi.vercel.app";
-  const protocol = host.includes("localhost") ? "http" : "https";
-  fetch(`${protocol}://${host}/api/telegram/process`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-internal-secret": INTERNAL_SECRET,
-    },
-    body: JSON.stringify({ message }),
-  }).catch((err) => console.error("[Route] Failed to dispatch to process:", err));
+  const chatId = (message.chat as Record<string, unknown>)?.id as number;
+  console.log(`[Route] Processing message from chat ${chatId}`);
 
-  // Return 200 immediately so Telegram doesn't timeout
+  try {
+    await handleMessage(message as Parameters<typeof handleMessage>[0], TELEGRAM_BOT_TOKEN);
+    console.log("[Route] handleMessage completed");
+  } catch (error) {
+    console.error("[Route] Message handler error:", error);
+    if (chatId && TELEGRAM_BOT_TOKEN) {
+      try {
+        const errText = error instanceof Error ? error.message : String(error);
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `Error: ${errText.slice(0, 200)}\n\nTry again or rephrase.`,
+          }),
+        });
+      } catch {
+        console.error("[Route] Failed to send error notification");
+      }
+    }
+  }
+
   return NextResponse.json({ ok: true });
 }
 
@@ -51,9 +68,9 @@ export async function GET() {
 
   return NextResponse.json({
     status: "Flow Agent Bot is running",
-    version: "2.2",
+    version: "2.4",
     agents: ["property", "cx", "rates", "pipeline", "content", "general"],
-    tools: 20,
+    tools: 27,
     health: {
       telegram_token: hasToken ? "set" : "MISSING",
       anthropic_key: hasAnthropic ? "set" : "MISSING",

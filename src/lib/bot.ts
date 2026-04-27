@@ -9,15 +9,13 @@ import {
   getSystemPrompt,
   getBrainContext,
 } from "./agents";
-import { TOOLS } from "./tools";
 import { handleToolCall } from "./tool-handlers";
 import { getHistory, addToHistory } from "./memory";
-
-function getAnthropicClient() {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const Anthropic = require("@anthropic-ai/sdk").default;
-  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-}
+import { chatWithClaude } from "./claude";
+import { logActivity, HELP_TEXT as LOG_HELP } from "./activity-log";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 type TelegramMessage = {
   message_id: number;
@@ -73,42 +71,36 @@ export async function handleMessage(message: TelegramMessage, token: string) {
   }
 
   // Build message content (text or text + image)
-  const messageContent: Array<Record<string, unknown>> = [];
+  // Build the user message + save any attached photo to disk so Claude can read it
+  let userMessage = text;
+  let imagePath: string | undefined;
 
-  // Handle photo messages (screenshots, bills, documents)
   if (message.photo?.length) {
     const largestPhoto = message.photo[message.photo.length - 1];
     try {
       const fileUrl = await getFileUrl(token, largestPhoto.file_id);
       const imageRes = await fetch(fileUrl);
-      const imageBuffer = await imageRes.arrayBuffer();
-      const base64 = Buffer.from(imageBuffer).toString("base64");
-      const mediaType = fileUrl.endsWith(".png") ? "image/png" : "image/jpeg";
+      const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
+      const ext = fileUrl.endsWith(".png") ? "png" : "jpg";
+      imagePath = join(tmpdir(), `tg-${message.message_id}.${ext}`);
+      await writeFile(imagePath, imageBuffer);
 
-      messageContent.push({
-        type: "image",
-        source: { type: "base64", media_type: mediaType, data: base64 },
-      });
       const caption = message.caption || text || "";
       const isLeadContext = /lead|new client|referral|buyer|purchase|mortgage/i.test(caption);
       const photoPrompt = isLeadContext
         ? "This is a lead screenshot. Extract ALL contact and mortgage info. Use zoho_create_full_lead to create the lead. Ask clarifying questions for anything missing (email, purpose, referral source are required). Be concise."
         : "Analyze this image. If it contains lead/contact info, extract it and use zoho_create_full_lead. If it's a bill or receipt, categorize it and log it. If it's a document, describe what it is and suggest next steps.";
-      messageContent.push({
-        type: "text",
-        text: caption ? `${caption}\n\n${photoPrompt}` : photoPrompt,
-      });
+      userMessage = caption ? `${caption}\n\n${photoPrompt}` : photoPrompt;
     } catch (e) {
-      messageContent.push({ type: "text", text: text || "I received a photo but couldn't process it." });
+      console.error("[Bot] Photo fetch error:", e);
+      userMessage = text || "I received a photo but couldn't download it.";
     }
   } else if (message.voice) {
-    // Handle voice notes -- transcribe via Whisper-compatible API
     try {
       const fileUrl = await getFileUrl(token, message.voice.file_id);
       const audioRes = await fetch(fileUrl);
       const audioBuffer = await audioRes.arrayBuffer();
 
-      // Use Groq Whisper API for transcription (free tier, fast)
       const groqKey = process.env.GROQ_API_KEY;
       if (groqKey) {
         const formData = new FormData();
@@ -123,29 +115,20 @@ export async function handleMessage(message: TelegramMessage, token: string) {
         });
         const whisperData = await whisperRes.json() as { text?: string };
         const transcript = whisperData.text || "Could not transcribe voice note.";
-
-        messageContent.push({
-          type: "text",
-          text: `[Voice note transcription]: ${transcript}\n\nProcess this. If it contains lead info, use zoho_create_full_lead. Ask clarifying questions for anything missing.`,
-        });
+        userMessage = `[Voice note]: ${transcript}\n\nProcess this. If it contains lead info, use zoho_create_full_lead.`;
       } else {
-        messageContent.push({
-          type: "text",
-          text: "Voice notes require Groq API key for transcription. Please type your message instead, or send a screenshot.",
-        });
+        userMessage = "Voice notes require Groq API key. Please type your message instead.";
       }
     } catch (e) {
-      messageContent.push({ type: "text", text: "Couldn't process voice note. Try typing or sending a screenshot." });
+      console.error("[Bot] Voice processing error:", e);
+      userMessage = "Couldn't process voice note. Try typing instead.";
     }
-  } else {
-    messageContent.push({ type: "text", text });
   }
 
-  // Determine agent
+  // Determine agent + gather context
   const agent = userAgents[userId] || detectAgent(text);
   userAgents[userId] = agent;
 
-  // Get agent-specific context + brain (always loaded)
   let context = "";
   try {
     const [agentContext, brainContext] = await Promise.all([
@@ -167,99 +150,35 @@ export async function handleMessage(message: TelegramMessage, token: string) {
     console.error("Context fetch error:", e);
   }
 
-  // Call Claude with tools + conversation memory
+  // Typing indicator during Claude call
+  const typingInterval = setInterval(() => sendTypingAction(token, chatId), 4000);
+
   try {
-    const anthropic = getAnthropicClient();
-
-    // Build messages with conversation history
-    const history = await getHistory(userId);
-    const historyMessages = history.map(h => ({ role: h.role, content: h.content }));
-
-    // Add current message
-    const messages: Array<Record<string, unknown>> = [
-      ...historyMessages,
-      { role: "user", content: messageContent },
-    ];
-
     // Save user message to history
-    const userText = typeof messageContent === "string" ? messageContent : text;
-    await addToHistory(userId, "user", userText);
+    await addToHistory(userId, "user", userMessage);
 
-    // Send typing indicator periodically
-    const typingInterval = setInterval(() => sendTypingAction(token, chatId), 4000);
-
-    let response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      system: getSystemPrompt(agent) + "\n\n" + context,
-      tools: TOOLS,
-      messages,
+    // Call Claude via Agent SDK (uses Max subscription, no API credits)
+    const history = await getHistory(userId);
+    const result = await chatWithClaude({
+      systemPrompt: getSystemPrompt(agent) + "\n\n" + context,
+      userMessage,
+      imagePath,
+      history: history.map((h) => ({ role: h.role, content: h.content })),
     });
-
-    // Handle tool use loop (up to 5 iterations)
-    let iterations = 0;
-
-    while (iterations < 5) {
-      // Check if Claude wants to use a tool
-      const toolUse = response.content.find((c: Record<string, unknown>) => c.type === "tool_use");
-      if (!toolUse) break;
-
-      const toolName = (toolUse as Record<string, unknown>).name as string;
-      const toolInput = (toolUse as Record<string, unknown>).input as Record<string, unknown>;
-      const toolId = (toolUse as Record<string, unknown>).id as string;
-
-      // For send_email without confirm, store as pending and show draft
-      if (toolName === "send_email" && !toolInput.confirm) {
-        const result = await handleToolCall(toolName, toolInput);
-        pendingActions[userId] = { tool: toolName, input: toolInput };
-        await sendMessage(token, chatId, result + "\n\nReply 'send it' to confirm or 'cancel' to discard.");
-        return;
-      }
-
-      // Execute the tool
-      const result = await handleToolCall(toolName, toolInput);
-
-      // Add assistant response and tool result to messages
-      messages.push({ role: "assistant", content: response.content });
-      messages.push({
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: toolId, content: result }],
-      });
-
-      // Get next response
-      response = await anthropic.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
-        system: getSystemPrompt(agent) + "\n\nCONTEXT DATA:\n" + context,
-        tools: TOOLS,
-        messages,
-      });
-
-      iterations++;
-    }
 
     clearInterval(typingInterval);
 
-    // Extract final text response
-    const textBlocks = response.content.filter((c: Record<string, unknown>) => c.type === "text");
-    const reply = textBlocks.length > 0
-      ? textBlocks.map((c: Record<string, unknown>) => c.text).join("\n")
-      : "Done.";
-
-    // Save assistant response to history
+    const reply = result.text;
     await addToHistory(userId, "assistant", reply);
-
     await sendMessage(token, chatId, reply);
-  } catch (error) {
-    console.error("Claude error:", error);
-    const errMsg = error instanceof Error ? error.message : "Unknown error";
-    if (errMsg.includes("rate_limit")) {
-      await sendMessage(token, chatId, "Rate limited. Wait a moment and try again.");
-    } else if (errMsg.includes("overloaded")) {
-      await sendMessage(token, chatId, "AI is busy. Try again in 30 seconds.");
-    } else {
-      await sendMessage(token, chatId, "Something went wrong. Try again or rephrase your request.");
+
+    if (result.error) {
+      console.error("[Bot] Claude returned error:", result.error);
     }
+  } catch (error) {
+    clearInterval(typingInterval);
+    console.error("[Bot] handler error:", error);
+    await sendMessage(token, chatId, "Something went wrong. Try again or rephrase your request.");
   }
 }
 
@@ -304,6 +223,7 @@ Agents:
 
 Actions:
 /lead - Quick lead intake (screenshot, voice, or text)
+/log <kind> <who> - Log activity to Sales scoreboard (call/dm/meeting/etc)
 /partner - Process partner call (paste notes, get follow-up email)
 /shortform <topic> - 5 video scripts for Reels/TikTok
 /shortform hook <topic> - 10 hooks for testing
@@ -434,6 +354,29 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
       // Has text -- rewrite the message text and let it fall through to Claude
       message.text = `NEW LEAD INTAKE: ${leadText}\n\nExtract all info and use zoho_create_full_lead. Ask clarifying questions for anything missing before creating.`;
       return false;
+    }
+
+    case "/log": {
+      const body = text.replace(/^\/log\s*/i, "").trim();
+      if (!body) {
+        await sendMessage(token, chatId, LOG_HELP);
+        return true;
+      }
+      const result = await logActivity(body);
+      if (result.ok) {
+        await sendMessage(
+          token,
+          chatId,
+          `Logged: ${result.label}.\n\nSee ops.getflowmortgage.ca`,
+        );
+      } else {
+        await sendMessage(
+          token,
+          chatId,
+          `Could not log: ${result.error}.\n\n${LOG_HELP}`,
+        );
+      }
+      return true;
     }
 
     case "/partner": {
