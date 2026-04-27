@@ -159,6 +159,122 @@ async function fetchMtdFunded(): Promise<{ amount: number; count: number }> {
   return { amount, count };
 }
 
+async function fetchActiveProjects(): Promise<Array<{ name: string; status: string; nextAction: string; staleDays: number; category?: string }>> {
+  const { data } = await supabase
+    .from("projects")
+    .select("name, status, next_action, last_touched, category")
+    .in("status", ["active", "blocked", "in_progress"])
+    .order("last_touched", { ascending: false })
+    .limit(15);
+  const now = Date.now();
+  return (data ?? []).map((p) => ({
+    name: (p.name as string) ?? "",
+    status: (p.status as string) ?? "",
+    nextAction: ((p.next_action as string) ?? "").slice(0, 140),
+    staleDays: p.last_touched
+      ? Math.floor((now - new Date(p.last_touched as string).getTime()) / 86400000)
+      : 999,
+    category: (p.category as string) ?? undefined,
+  }));
+}
+
+async function fetchPendingApprovals(): Promise<Array<{ kind: string; preview: string; priority: string; sourceAgent: string; ageHours: number }>> {
+  const { data } = await supabase
+    .from("approval_queue")
+    .select("kind, preview, priority, source_agent, created_at, approved_at, rejection_reason")
+    .is("approved_at", null)
+    .is("rejection_reason", null)
+    .order("priority", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(8);
+  const now = Date.now();
+  return (data ?? []).map((a) => ({
+    kind: (a.kind as string) ?? "",
+    preview: ((a.preview as string) ?? "").slice(0, 180),
+    priority: (a.priority as string) ?? "normal",
+    sourceAgent: (a.source_agent as string) ?? "",
+    ageHours: a.created_at
+      ? Math.floor((now - new Date(a.created_at as string).getTime()) / 3600000)
+      : 0,
+  }));
+}
+
+async function fetchRecentObservations(): Promise<Array<{ agent: string; trigger: string; outcome: string; summary: string; ageHours: number }>> {
+  const cutoff = new Date(Date.now() - 24 * 3600000).toISOString();
+  const { data } = await supabase
+    .from("agent_observations")
+    .select("agent_name, trigger, outcome_status, payload, anomaly, action_taken, created_at")
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  const now = Date.now();
+  return (data ?? []).map((o) => {
+    const payload = o.payload as Record<string, unknown> | null;
+    const summary =
+      (o.action_taken as string) ||
+      (o.anomaly as string) ||
+      (typeof payload?.summary === "string" ? (payload.summary as string) : "") ||
+      JSON.stringify(payload ?? {}).slice(0, 120);
+    return {
+      agent: (o.agent_name as string) ?? "",
+      trigger: (o.trigger as string) ?? "",
+      outcome: (o.outcome_status as string) ?? "",
+      summary: summary.slice(0, 180),
+      ageHours: o.created_at
+        ? Math.floor((now - new Date(o.created_at as string).getTime()) / 3600000)
+        : 0,
+    };
+  });
+}
+
+async function fetchRecentCoachingCalls(): Promise<Array<{ when: string; type: string; decisions: string; actions: string }>> {
+  const cutoff = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+  const { data } = await supabase
+    .from("call_transcripts")
+    .select("call_date, call_type, key_decisions, action_items, intelligence")
+    .gte("call_date", cutoff)
+    .in("call_type", ["coaching", "planning", "partner"])
+    .order("call_date", { ascending: false })
+    .limit(5);
+  return (data ?? []).map((c) => {
+    const decisions = Array.isArray(c.key_decisions)
+      ? (c.key_decisions as string[]).slice(0, 3).join("; ")
+      : (c.key_decisions as string) ?? "";
+    const actions = Array.isArray(c.action_items)
+      ? (c.action_items as string[]).slice(0, 3).join("; ")
+      : (c.action_items as string) ?? "";
+    return {
+      when: (c.call_date as string) ?? "",
+      type: (c.call_type as string) ?? "",
+      decisions: decisions.slice(0, 200),
+      actions: actions.slice(0, 200),
+    };
+  });
+}
+
+async function fetchKeyMemoryEntries(): Promise<Array<{ topic: string; category: string; content: string }>> {
+  // Pull operating principles + active priorities from the brain table.
+  const topicsOfInterest = [
+    "10x batch tracker",
+    "half-done inventory",
+    "systemic gaps",
+    "advisory team",
+    "coach mandate",
+    "operating system",
+  ];
+  const { data } = await supabase
+    .from("brain")
+    .select("topic, category, content, updated_at")
+    .or(topicsOfInterest.map((t) => `topic.ilike.%${t}%`).join(","))
+    .order("updated_at", { ascending: false })
+    .limit(6);
+  return (data ?? []).map((m) => ({
+    topic: (m.topic as string) ?? "",
+    category: (m.category as string) ?? "",
+    content: ((m.content as string) ?? "").slice(0, 600),
+  }));
+}
+
 async function fetchTargets(): Promise<Record<string, number>> {
   const { data } = await supabase
     .from("ops_targets")
@@ -211,13 +327,18 @@ export async function buildCompassContext(): Promise<string> {
 
   const token = await getZohoToken();
 
-  const [activity, mtd, targets, top40, openDeals, stalledTasks] = await Promise.all([
+  const [activity, mtd, targets, top40, openDeals, stalledTasks, projects, approvals, observations, coachingCalls, brainMem] = await Promise.all([
     fetchActivityPace(),
     fetchMtdFunded(),
     fetchTargets(),
     token ? fetchTop40(token) : Promise.resolve([]),
     token ? fetchOwnedOpenDeals(token) : Promise.resolve([]),
     token ? fetchStalledTasks(token) : Promise.resolve([]),
+    fetchActiveProjects(),
+    fetchPendingApprovals(),
+    fetchRecentObservations(),
+    fetchRecentCoachingCalls(),
+    fetchKeyMemoryEntries(),
   ]);
 
   const now = new Date();
@@ -284,6 +405,54 @@ export async function buildCompassContext(): Promise<string> {
       ? "- None overdue."
       : stalledTasks
           .map((t) => `  - ${t.subject} — ${t.daysOverdue}d overdue`)
+          .join("\n"),
+    "",
+    "### Active projects (Flow Brain Supabase)",
+    projects.length === 0
+      ? "- No active projects tracked."
+      : projects
+          .map(
+            (p) =>
+              `- ${p.name}${p.category ? ` [${p.category}]` : ""} — ${p.status} — ${p.staleDays}d since touch — next: ${p.nextAction || "(no next action set)"}`,
+          )
+          .join("\n"),
+    "",
+    "### Pending approvals (waiting on Alex)",
+    approvals.length === 0
+      ? "- Nothing waiting."
+      : approvals
+          .map(
+            (a) =>
+              `- [${a.priority}] ${a.kind} from ${a.sourceAgent} — ${a.ageHours}h old — ${a.preview}`,
+          )
+          .join("\n"),
+    "",
+    "### Last 24h agent OS observations",
+    observations.length === 0
+      ? "- Quiet. No agent activity."
+      : observations
+          .slice(0, 8)
+          .map(
+            (o) =>
+              `- ${o.agent}/${o.trigger} (${o.outcome}, ${o.ageHours}h ago) — ${o.summary}`,
+          )
+          .join("\n"),
+    "",
+    "### Recent coaching/planning/partner call decisions (last 14d)",
+    coachingCalls.length === 0
+      ? "- No recent calls in the brain."
+      : coachingCalls
+          .map(
+            (c) =>
+              `- ${c.when} (${c.type}): decisions: ${c.decisions || "—"} | actions: ${c.actions || "—"}`,
+          )
+          .join("\n"),
+    "",
+    "### Operating principles (Flow Brain memory)",
+    brainMem.length === 0
+      ? "- (no relevant brain entries fetched)"
+      : brainMem
+          .map((m) => `- ${m.topic} [${m.category}]: ${m.content.slice(0, 200)}…`)
           .join("\n"),
     "",
     "## End live state. Use these numbers, do not invent.",
