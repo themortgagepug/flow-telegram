@@ -5,7 +5,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 );
 
-const ZOHO_API = "https://www.zohoapis.com/crm/v7";
+export const ZOHO_API = "https://www.zohoapis.com/crm/v7";
 const ZOHO_TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token";
 
 // === ZOHO AUTH (module-scoped token cache) ===
@@ -63,7 +63,7 @@ async function refreshZohoToken(): Promise<string | null> {
   }
 }
 
-async function getZohoToken(): Promise<string | null> {
+export async function getZohoToken(): Promise<string | null> {
   if (tokenCache && Date.now() < tokenCache.expiresAt) {
     return tokenCache.token;
   }
@@ -71,7 +71,7 @@ async function getZohoToken(): Promise<string | null> {
 }
 
 // Zoho fetch wrapper with token caching + single retry on 401
-async function zohoFetch(url: string, options: RequestInit = {}): Promise<Response> {
+export async function zohoFetch(url: string, options: RequestInit = {}): Promise<Response> {
   let token = await getZohoToken();
   if (!token) throw new Error("Zoho authentication unavailable -- check env vars");
 
