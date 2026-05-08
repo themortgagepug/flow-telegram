@@ -1,4 +1,5 @@
-import { sendMessage, sendTypingAction, getFileUrl } from "./telegram";
+import { sendMessage, sendTypingAction, getFileUrl, sendDocument } from "./telegram";
+import { runRenewalForDealId } from "./renewal/handler";
 import { getTeamMember } from "./team";
 import {
   getPropertyContext,
@@ -394,6 +395,31 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
       // Has text -- rewrite and let Claude use the process_partner_call tool
       message.text = `PARTNER CALL NOTES: ${partnerText}\n\nProcess this using process_partner_call tool. Send the full text as-is.`;
       return false;
+    }
+
+    case "/renewal": {
+      const dealIdRaw = text.replace(/^\/renewal\s*/i, "").trim();
+      if (!dealIdRaw) {
+        await sendMessage(token, chatId,
+          `Renewal scenarios calculator. Usage:\n\n` +
+          `/renewal &lt;Zoho Deal ID&gt;\n\n` +
+          `Returns 5-path comparison xlsx (Stay / Switch / Blend / Break+Refi / Variable) ` +
+          `with both IRD methods, total 5yr cost per path, break-even rate, and trapped-flexibility check. ` +
+          `Uninsured-only v1.`
+        );
+        return true;
+      }
+
+      await sendTypingAction(token, chatId);
+      const result = await runRenewalForDealId(dealIdRaw);
+      if (!result.ok) {
+        const hint = result.hint ? `\n\n${result.hint}` : "";
+        await sendMessage(token, chatId, `Renewal failed: ${result.error}${hint}`);
+        return true;
+      }
+
+      await sendDocument(token, chatId, result.filename, result.xlsxBytes, result.summaryText);
+      return true;
     }
 
     default:

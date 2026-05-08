@@ -60,3 +60,29 @@ export async function getFileUrl(token: string, fileId: string): Promise<string>
   const data = await res.json();
   return `https://api.telegram.org/file/bot${token}/${data.result.file_path}`;
 }
+
+export async function sendDocument(
+  token: string,
+  chatId: number,
+  filename: string,
+  bytes: Uint8Array,
+  caption?: string
+) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  // Cast to BlobPart to satisfy DOM lib types in this Next.js env
+  form.append("document", new Blob([bytes as BlobPart]), filename);
+  if (caption) {
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+  }
+
+  const res = await fetch(`${TELEGRAM_API}${token}/sendDocument`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "<no body>");
+    throw new Error(`Telegram sendDocument failed (${res.status}): ${errText.slice(0, 200)}`);
+  }
+}
