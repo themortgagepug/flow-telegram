@@ -216,10 +216,16 @@ class handler(BaseHTTPRequestHandler):
         })
 
     def do_POST(self) -> None:
+        import time as _time
+        t0 = _time.time()
+        deal_id = None
+        lender = None
+        outcome = "error"
         try:
             secret = self.headers.get(SECRET_HEADER, "")
             if not EXPECTED_SECRET or secret != EXPECTED_SECRET:
                 self._send(401, {"error": "unauthorized"})
+                outcome = "unauthorized"
                 return
 
             content_length = int(self.headers.get("Content-Length", "0"))
@@ -238,12 +244,16 @@ class handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "inputs must be a JSON object"})
                 return
 
+            deal_id = inputs_raw.get("deal_id")
+            lender = inputs_raw.get("lender")
+
             # v1 hard guard: insured deals error out
             if str(inputs_raw.get("insured_status", "")).lower() == "insured":
                 self._send(422, {
                     "error": "insured_renewal_v1_excluded",
                     "message": "Insured renewals require manual review — book Alex.",
                 })
+                outcome = "insured_excluded"
                 return
 
             inputs = _enrich_inputs(inputs_raw)
@@ -259,6 +269,7 @@ class handler(BaseHTTPRequestHandler):
                         "calc_errors": results["errors"],
                         "enriched_inputs_keys": sorted(inputs.keys()),
                     })
+                    outcome = "calc_failed"
                     return
 
                 render.render_xlsx(results, str(xlsx_path))
@@ -269,9 +280,34 @@ class handler(BaseHTTPRequestHandler):
                 "xlsx_b64": base64.b64encode(xlsx_bytes).decode("ascii"),
                 "filename": _filename_for(inputs, results),
             })
+            outcome = "ok"
+
+            # Telemetry — Vercel captures stdout, queryable in dashboard logs
+            print(json.dumps({
+                "event": "renewal_compute",
+                "outcome": outcome,
+                "deal_id": deal_id,
+                "lender": lender,
+                "ird_method": inputs.get("lender_ird_method"),
+                "trapped": (results.get("trapped_check") or {}).get("is_trapped"),
+                "rate_type": inputs.get("rate_type"),
+                "province": inputs.get("province"),
+                "duration_ms": int((_time.time() - t0) * 1000),
+                "calc_version": getattr(calc, "CALC_VERSION", "unknown"),
+            }))
         except Exception as e:
             tb = traceback.format_exc()
             self._send(500, {"error": str(e), "traceback": tb[-2000:]})
+            outcome = "exception"
+            print(json.dumps({
+                "event": "renewal_compute",
+                "outcome": outcome,
+                "deal_id": deal_id,
+                "lender": lender,
+                "exception_type": type(e).__name__,
+                "exception_msg": str(e)[:200],
+                "duration_ms": int((_time.time() - t0) * 1000),
+            }))
 
 
 def _filename_for(inputs: dict, results: dict) -> str:
