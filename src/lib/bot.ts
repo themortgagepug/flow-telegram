@@ -413,8 +413,10 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
       await sendTypingAction(token, chatId);
       const result = await runRenewalForDealId(dealIdRaw);
       if (!result.ok) {
-        const hint = result.hint ? `\n\n${result.hint}` : "";
-        await sendMessage(token, chatId, `Renewal failed: ${result.error}${hint}`);
+        const lines = [`<b>Renewal failed:</b> ${result.error}`];
+        if (result.hint) lines.push("", result.hint);
+        if (result.dealUrl) lines.push("", `<a href="${result.dealUrl}">Open deal in Zoho</a>`);
+        await sendMessage(token, chatId, lines.join("\n"));
         return true;
       }
 

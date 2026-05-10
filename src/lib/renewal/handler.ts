@@ -51,37 +51,75 @@ export interface RenewalError {
   ok: false;
   error: string;
   hint?: string;
+  dealUrl?: string;
+}
+
+const ZOHO_DEAL_URL_BASE = "https://crm.zoho.com/crm/org802107322/tab/Potentials";
+
+function dealUrl(dealId: string): string {
+  return `${ZOHO_DEAL_URL_BASE}/${dealId}`;
 }
 
 export async function runRenewalForDealId(dealIdRaw: string): Promise<RenewalResult | RenewalError> {
   const dealId = dealIdRaw.trim();
   if (!/^\d{15,20}$/.test(dealId)) {
-    return { ok: false, error: "Invalid Deal ID", hint: "Use the 18-digit Zoho Deal ID. /renewal 5652769000xxxxxxx" };
+    return {
+      ok: false,
+      error: "Invalid Deal ID",
+      hint: "Use the 18-digit Zoho Deal ID. Find it in the URL when viewing the deal.\n\nExample: <code>/renewal 5652769000123456789</code>",
+    };
   }
+
+  const url = dealUrl(dealId);
 
   const deal = await fetchDeal(dealId);
   if (!deal) {
-    return { ok: false, error: `Deal ${dealId} not found in Zoho.` };
+    return {
+      ok: false,
+      error: `Deal ${dealId} not found in Zoho.`,
+      hint: "Confirm the Deal ID. The bot only sees Deals that exist and are accessible via the Zoho API auth.",
+      dealUrl: url,
+    };
   }
 
   if ((deal.High_Ratio_Insurable_Uninsurable || "").toLowerCase() === "insured") {
     return {
       ok: false,
       error: "Insured renewal — manual review required.",
-      hint: "v1 scope is uninsured-only. Book Alex for insured deals.",
+      hint: "v1 scope is uninsured-only (different lender pool). Book Alex for insured renewals. Insured math + lender list ships in v2.",
+      dealUrl: url,
     };
   }
 
-  if (!deal.Maturity_Date) return { ok: false, error: "Maturity_Date missing on this deal. Update Zoho first." };
-  if (!deal.Funded_Date) return { ok: false, error: "Funded_Date missing on this deal. Update Zoho first." };
-  if (!deal.Mortgage_Amount || !deal.Mortgage_Rate || !deal.Payment_Amount) {
-    return { ok: false, error: "Mortgage_Amount / Mortgage_Rate / Payment_Amount missing on this deal." };
+  const missing: string[] = [];
+  if (!deal.Maturity_Date) missing.push("Maturity_Date");
+  if (!deal.Funded_Date) missing.push("Funded_Date");
+  if (!deal.Mortgage_Amount) missing.push("Mortgage_Amount");
+  if (!deal.Mortgage_Rate) missing.push("Mortgage_Rate");
+  if (!deal.Payment_Amount) missing.push("Payment_Amount");
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      error: `Missing required field(s) on this deal: ${missing.join(", ")}.`,
+      hint: `Open the deal in Zoho and populate ${missing.length === 1 ? "this field" : "these fields"} before running /renewal again. All five are required for IRD + amortization math.`,
+      dealUrl: url,
+    };
   }
 
   const marketRates = await fetchMarketRates();
   if (!marketRates) {
-    return { ok: false, error: "Could not fetch live market_rates from Supabase." };
+    return {
+      ok: false,
+      error: "Could not fetch live market_rates from Supabase.",
+      hint: "Run <code>/rate-update</code> first, then retry. If rates haven't been updated this week the renewal calc will refuse stale data.",
+      dealUrl: url,
+    };
   }
+
+  // After the missing[] gate above, these are guaranteed non-undefined.
+  const mortgageAmount = deal.Mortgage_Amount as number;
+  const mortgageRate = deal.Mortgage_Rate as number;
+  const paymentAmount = deal.Payment_Amount as number;
 
   const lender = typeof deal.Lender_Name === "object" && deal.Lender_Name
     ? deal.Lender_Name.name
@@ -90,15 +128,15 @@ export async function runRenewalForDealId(dealIdRaw: string): Promise<RenewalRes
   const rawInputs = {
     deal_id: dealId,
     deal_name: deal.Deal_Name,
-    mortgage_amount: deal.Mortgage_Amount,
-    contract_rate: deal.Mortgage_Rate / 100, // Zoho stores as percent (e.g. 4.25)
+    mortgage_amount: mortgageAmount,
+    contract_rate: mortgageRate / 100, // Zoho stores as percent (e.g. 4.25)
     lender,
     rate_type: deal.Rate_Type || "Fixed",
     funded_date: deal.Funded_Date,
     maturity_date: deal.Maturity_Date,
     term_length_months: deal.Term_Length,
     original_amortization_months: deal.Amortization,
-    payment_amount: deal.Payment_Amount,
+    payment_amount: paymentAmount,
     insured_status: deal.High_Ratio_Insurable_Uninsurable || "Uninsurable",
     combined_address: deal.Combined_Address,
     market_rates: marketRates,
@@ -115,8 +153,28 @@ export async function runRenewalForDealId(dealIdRaw: string): Promise<RenewalRes
   });
 
   if (!res.ok) {
-    const errBody = await res.text();
-    return { ok: false, error: `compute service ${res.status}`, hint: errBody.slice(0, 300) };
+    let parsed: { error?: string; calc_errors?: unknown; message?: string } = {};
+    try { parsed = JSON.parse(await res.text()) as typeof parsed; } catch { /* swallow */ }
+    if (parsed.error === "insured_renewal_v1_excluded") {
+      return { ok: false, error: parsed.message || "Insured renewal", dealUrl: url };
+    }
+    if (parsed.error === "calc_failed") {
+      return {
+        ok: false,
+        error: "Calc failed for this deal.",
+        hint: `${JSON.stringify(parsed.calc_errors).slice(0, 250)}\n\nMost common cause: rate or balance values out of expected range. Verify Zoho fields.`,
+        dealUrl: url,
+      };
+    }
+    if (res.status === 401) {
+      return { ok: false, error: "Compute service auth failed.", hint: "RENEWAL_COMPUTE_SECRET out of sync between bot and compute. Tell Alex." };
+    }
+    return {
+      ok: false,
+      error: `Compute service returned ${res.status}.`,
+      hint: (parsed.error || parsed.message || "").slice(0, 250),
+      dealUrl: url,
+    };
   }
 
   const data = (await res.json()) as {
