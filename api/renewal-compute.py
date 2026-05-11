@@ -24,6 +24,8 @@ import re
 import sys
 import tempfile
 import traceback
+import urllib.error
+import urllib.request
 from datetime import date, datetime
 from decimal import Decimal, getcontext
 from http.server import BaseHTTPRequestHandler
@@ -48,6 +50,54 @@ BIG5_LENDERS = {
 }
 
 CSV_PATH = HERE / "_lib" / "historical_big5_posted_rates.csv"
+
+SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL",
+                              "https://jkeujqzlclrxhwamplby.supabase.co")
+SUPABASE_RATES_URL = os.environ.get("SUPABASE_RATES_FUNCTION_URL",
+                                     f"{SUPABASE_URL}/functions/v1/rates?format=slim")
+SUPABASE_FUNCTION_SECRET = os.environ.get("SUPABASE_FUNCTION_SECRET", "")
+
+
+def _fetch_market_rates() -> dict | None:
+    """Fetch market_rates from the Supabase /rates function. Same shape as TS handler."""
+    try:
+        req = urllib.request.Request(SUPABASE_RATES_URL)
+        if SUPABASE_FUNCTION_SECRET:
+            req.add_header("X-Function-Secret", SUPABASE_FUNCTION_SECRET)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError):
+        return None
+
+    # Normalize the same way the TS handler does
+    adv = data.get("advertised") or data.get("displayed") or data
+
+    def _frac(v: Any) -> float:
+        n = float(v) if v is not None else 0.0
+        return n / 100 if n > 1 else n
+
+    if isinstance(adv, dict) and "5yr_fixed" in adv and "prime" in adv:
+        return {
+            "5yr_fixed": _frac(adv.get("5yr_fixed")),
+            "5yr_variable": _frac(adv.get("5yr_variable")),
+            "3yr_fixed": _frac(adv.get("3yr_fixed")),
+            "1yr_fixed": _frac(adv.get("1yr_fixed")),
+            "prime": _frac(adv.get("prime")),
+            "updated_at": data.get("updated_at") or datetime.utcnow().isoformat(),
+        }
+    # Long-format fallback: rates[] of {rate_type, term_key, rate}
+    rates = data.get("rates")
+    if isinstance(rates, list):
+        lookup = {f'{r.get("term_key")}_{r.get("rate_type")}': _frac(r.get("rate")) for r in rates}
+        return {
+            "5yr_fixed": lookup.get("5yr_fixed", 0),
+            "5yr_variable": lookup.get("5yr_variable") or lookup.get("variable_variable") or 0,
+            "3yr_fixed": lookup.get("3yr_fixed", 0),
+            "1yr_fixed": lookup.get("1yr_fixed", 0),
+            "prime": lookup.get("prime_prime") or lookup.get("prime_variable") or 0,
+            "updated_at": data.get("updated_at") or datetime.utcnow().isoformat(),
+        }
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +258,23 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_xlsx(self, xlsx_bytes: bytes, filename: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(xlsx_bytes)))
+        self.end_headers()
+        self.wfile.write(xlsx_bytes)
+
+    def _wants_binary(self) -> bool:
+        """Deluge / curl --output-file callers set Accept or ?format=binary."""
+        accept = (self.headers.get("Accept", "") or "").lower()
+        if "spreadsheetml" in accept or "octet-stream" in accept:
+            return True
+        # ?format=binary in path
+        return "format=binary" in (self.path or "")
+
     def do_GET(self) -> None:
         self._send(200, {
             "service": "flow-renewal-compute",
@@ -256,6 +323,18 @@ class handler(BaseHTTPRequestHandler):
                 outcome = "insured_excluded"
                 return
 
+            # Fallback fetch market_rates if not supplied (Deluge caller doesn't have them)
+            if not inputs_raw.get("market_rates"):
+                fetched = _fetch_market_rates()
+                if fetched:
+                    inputs_raw["market_rates"] = fetched
+                else:
+                    self._send(503, {
+                        "error": "market_rates_unavailable",
+                        "message": "Could not fetch live market_rates from Supabase. Try again later.",
+                    })
+                    return
+
             inputs = _enrich_inputs(inputs_raw)
 
             with tempfile.TemporaryDirectory() as tmp:
@@ -275,11 +354,15 @@ class handler(BaseHTTPRequestHandler):
                 render.render_xlsx(results, str(xlsx_path))
                 xlsx_bytes = xlsx_path.read_bytes()
 
-            self._send(200, {
-                "summary": results,
-                "xlsx_b64": base64.b64encode(xlsx_bytes).decode("ascii"),
-                "filename": _filename_for(inputs, results),
-            })
+            filename = _filename_for(inputs, results)
+            if self._wants_binary():
+                self._send_xlsx(xlsx_bytes, filename)
+            else:
+                self._send(200, {
+                    "summary": results,
+                    "xlsx_b64": base64.b64encode(xlsx_bytes).decode("ascii"),
+                    "filename": filename,
+                })
             outcome = "ok"
 
             # Telemetry — Vercel captures stdout, queryable in dashboard logs
