@@ -10,6 +10,15 @@ export interface NotionWriteResult {
   error?: string;
 }
 
+// Map our internal platform key to the multi_select option name in the DB.
+const PLATFORM_OPTION: Record<string, string> = {
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  twitter: "X",
+  other: "Instagram", // safe default — closest fit, DB has no "Other"
+};
+
 export async function writeToNotion(item: InspirationItem): Promise<NotionWriteResult> {
   const token = process.env.NOTION_TOKEN;
   const dbId = process.env.NOTION_INSPIRATION_DB_ID;
@@ -27,12 +36,15 @@ export async function writeToNotion(item: InspirationItem): Promise<NotionWriteR
     item.notes_summary.slice(0, 100) ||
     `${item.platform} save ${item.date_added_iso.slice(0, 10)}`;
 
+  const platformName = PLATFORM_OPTION[item.platform] ?? "Instagram";
+
   const properties: Record<string, unknown> = {
     Title: { title: [{ text: { content: title } }] },
-    Platform: { select: { name: capitalize(item.platform) } },
+    Platform: { multi_select: [{ name: platformName }] },
     "Source URL": { url: item.url },
     "Date Added": { date: { start: item.date_added_iso } },
-    Type: { select: { name: typeForPlatform(item.platform) } },
+    Type: { select: { name: "Creator Pattern" } },
+    Source: { select: { name: "Manual" } },
   };
 
   if (item.creator_handle) {
@@ -58,7 +70,9 @@ export async function writeToNotion(item: InspirationItem): Promise<NotionWriteR
   }
 
   if (item.performance_tier_guess) {
-    properties["Performance Tier"] = { select: { name: item.performance_tier_guess } };
+    properties["Performance Tier"] = {
+      select: { name: item.performance_tier_guess },
+    };
   }
 
   const notesParts = [
@@ -69,10 +83,6 @@ export async function writeToNotion(item: InspirationItem): Promise<NotionWriteR
   ];
   properties.Notes = {
     rich_text: [{ text: { content: notesParts.join("").slice(0, 1900) } }],
-  };
-
-  properties.Source = {
-    rich_text: [{ text: { content: "Telegram share-to-save" } }],
   };
 
   try {
@@ -103,15 +113,4 @@ export async function writeToNotion(item: InspirationItem): Promise<NotionWriteR
       error: err instanceof Error ? err.message : String(err),
     };
   }
-}
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function typeForPlatform(p: string): string {
-  if (p === "instagram" || p === "tiktok") return "Reel";
-  if (p === "youtube") return "Video";
-  if (p === "twitter") return "Tweet";
-  return "Other";
 }

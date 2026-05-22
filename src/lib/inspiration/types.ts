@@ -11,12 +11,26 @@ export interface ExtractedMetadata {
   fetched_via: "oembed" | "og_scrape" | "url_only";
 }
 
+export type HookFramework =
+  | "Curiosity Gap"
+  | "Proof-First"
+  | "Pain Point"
+  | "Contrarian"
+  | "This Cost Me Thousands"
+  | "Unexpected Confession"
+  | "Question Hook"
+  | "Pattern Interrupt"
+  | "Before vs After"
+  | "Test / Experiment";
+
+export type PerformanceTier = "Outlier" | "Strong" | "Reference" | "Untested";
+
 export interface ClaudeAnalysis {
   topic_tags: string[];
-  hook_framework?: string;
+  hook_framework?: HookFramework;
   hook_text?: string;
   notes_summary: string;
-  performance_tier_guess?: "S" | "A" | "B" | "C";
+  performance_tier_guess?: PerformanceTier;
 }
 
 export interface InspirationItem extends ExtractedMetadata, ClaudeAnalysis {
