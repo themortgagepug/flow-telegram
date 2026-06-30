@@ -1,8 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 
+// Server-side: use the service key so tool reads/writes aren't blocked by row-level security.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://jkeujqzlclrxhwamplby.supabase.co",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+  process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 );
 
 export const ZOHO_API = "https://www.zohoapis.com/crm/v7";
@@ -101,13 +102,21 @@ export async function zohoFetch(url: string, options: RequestInit = {}): Promise
 
 // === TEAM ID MAP ===
 
+// Verified against live Zoho users list (org flowmortgageco) 2026-06-30.
 const TEAM_OWNER_IDS: Record<string, string> = {
-  alex: "5652769000000509001",
-  james: "5652769000000509001",  // James Rockwell
-  erica: "5652769000000509001",  // Update with Erica's actual Zoho user ID
-  joana: "5652769000096555001",  // Joana Kuchta
-  amy: "5652769000000509001",    // Update with Amy's actual Zoho user ID
+  alex: "5652769000000400001",   // Alex McFadyen (MA / PIC)
+  amy: "5652769000106926215",    // Amy Brownjohn (AMA / Loan Partner)
+  james: "5652769000000509001",  // James Rockwell (Ops Mgr)
+  erica: "5652769000000537001",  // Erica Parkinson (CX/Ops)
+  joana: "5652769000096555001",  // Joana Kuchta (Compliance)
+  lidia: "5652769000000637001",  // Lidia Klimek (Loan Specialist)
+  sckala: "5652769000035081001", // Sckala Amini (Loan Specialist)
+  leah: "5652769000138439001",   // Leah May (Loan Specialist)
+  kyle: "5652769000004725001",   // Kyle Burton
 };
+
+// New-lead deals live on the "Leads" layout (not a Pipeline). Verified id.
+const ZOHO_LEADS_LAYOUT_ID = "5652769000000422445";
 
 function resolveOwnerId(name: string): string {
   return TEAM_OWNER_IDS[name.toLowerCase()] || TEAM_OWNER_IDS.alex;
@@ -201,6 +210,8 @@ export async function handleToolCall(name: string, input: Record<string, unknown
         return await generateHooks(input);
       case "flowiq_search":
         return await flowiqSearch(input);
+      case "flow_knowledge":
+        return await flowKnowledge(input);
       case "call_intelligence":
         return await callIntelligence(input);
       case "objection_trends":
@@ -373,22 +384,30 @@ async function zohoCreateFullLead(input: Record<string, unknown>): Promise<strin
       }
     }
 
-    // Step 3: Create Mortgage (Deal)
-    const dealName = `${lastName}, ${firstName} - ${purpose}`;
+    // Step 3: Create Mortgage (Deal) — mirrors the internal New Lead Form.
+    // Verified against a live "New Lead Form" record: Leads layout, Stage
+    // "Lead Received", Owner = Amy (AMA), PIC = Alex (MA), Loan_Partner_1 = Amy,
+    // Source = "New Lead Form", notes in Summary_Notes, name "FLOW - Last, First - Purpose".
+    const dealName = `FLOW - ${lastName}, ${firstName} - ${purpose}`;
     const dealPayload: Record<string, unknown> = {
       Deal_Name: dealName,
-      Stage: "Qualification",
-      Pipeline: "Standard (Mortgages)",
-      // AMA field - assign Amy
-      AMA: { id: resolveOwnerId("amy") },
-      // Owner is Alex
-      Owner: { id: resolveOwnerId("alex") },
+      Stage: "Lead Received",
+      Layout: { id: ZOHO_LEADS_LAYOUT_ID },
+      Owner: { id: resolveOwnerId("amy") },   // new leads are owned by Amy
+      PIC: { id: resolveOwnerId("alex") },    // Person In Charge / Mortgage Advisor
+      Loan_Partner_1: { id: resolveOwnerId("amy") }, // AMA
+      Source: "New Lead Form",
+      Application_Preference: "Online Link",
     };
 
-    if (input.mortgage_amount) dealPayload.Amount = Number(input.mortgage_amount);
+    if (input.mortgage_amount) dealPayload.Expected_Mortgage_Amount = Number(input.mortgage_amount);
     if (contactId) dealPayload.Contact_Name = { id: contactId };
+    if (input.preferred_communication) {
+      dealPayload.Preferred_Communication = String(input.preferred_communication);
+    }
 
-    // Build description with all details
+    // Build the Summary_Notes block with all details (this is the field the
+    // team's Leads layout actually reads — Description is not used on new leads).
     const descParts: string[] = [];
     descParts.push(`Purpose: ${purpose}`);
     if (input.fthb) descParts.push(`FTHB: Yes`);
@@ -408,7 +427,7 @@ async function zohoCreateFullLead(input: Record<string, unknown>): Promise<strin
     if (input.key_notes) descParts.push(`\nNotes: ${input.key_notes}`);
     if (input.overview) descParts.push(`Overview: ${input.overview}`);
     descParts.push(`\nCreated via Flow Telegram Bot`);
-    dealPayload.Description = descParts.join("\n");
+    dealPayload.Summary_Notes = descParts.join("\n");
 
     console.log(`[Zoho] Creating deal: ${dealName}`);
     const dealRes = await zohoFetch(`${ZOHO_API}/Deals`, {
@@ -427,26 +446,36 @@ async function zohoCreateFullLead(input: Record<string, unknown>): Promise<strin
       results.push(`Deal creation issue: ${errMsg}`);
     }
 
-    // Step 4: Create Task for Amy to reach out
-    const today = new Date();
-    const dueDate = new Date(today.getTime() + 24 * 60 * 60 * 1000);
-    const dueDateStr = dueDate.toISOString().split("T")[0];
+    // Step 4: Create speed-to-lead outreach task for Amy. Due TODAY — new
+    // leads should get a first touch the same day, not 24h later.
+    const dueDateStr = new Date().toISOString().split("T")[0];
+    const contactVia = input.preferred_communication
+      ? String(input.preferred_communication)
+      : (input.phone ? "Phone" : "Email");
 
     const taskDesc = [
-      `New lead: ${firstName} ${lastName}`,
+      `NEW LEAD — first touch today.`,
+      ``,
+      `${firstName} ${lastName} — ${purpose}`,
       `Email: ${email}`,
       input.phone ? `Phone: ${input.phone}` : null,
-      `Purpose: ${purpose}`,
-      input.preferred_communication ? `Preferred contact method: ${input.preferred_communication}` : null,
-      input.referral_source ? `Referral: ${input.referral_source}` : null,
+      `Preferred contact: ${contactVia}`,
+      input.timeline ? `Timeline: ${input.timeline}` : null,
+      input.referral_source ? `Source: ${input.referral_source}` : null,
       input.referrer_name ? `Referred by: ${input.referrer_name}` : null,
+      input.realtor_name ? `Realtor: ${input.realtor_name}` : null,
       input.key_notes ? `Notes: ${input.key_notes}` : null,
-    ].filter(Boolean).join("\n");
+      ``,
+      `First touch:`,
+      `1. Reach out via ${contactVia} and book the consult.`,
+      `2. Send the application link.`,
+      `3. Log the call + move stage once connected.`,
+    ].filter((l) => l !== null).join("\n");
 
     const taskPayload = {
       data: [
         {
-          Subject: `Reach out to new lead: ${firstName} ${lastName}`,
+          Subject: `Call new lead today: ${firstName} ${lastName} (${purpose})`,
           Owner: { id: resolveOwnerId("amy") },
           Due_Date: dueDateStr,
           Description: taskDesc,
@@ -1625,6 +1654,49 @@ async function flowiqSearch(input: Record<string, unknown>): Promise<string> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return `FlowIQ search error: ${msg}`;
+  }
+}
+
+// === FLOW KNOWLEDGE (semantic search over the whole internal brain) ===
+// Calls the bfs-search edge function in RAW mode (answer:false): neutral semantic search over
+// Flow's full broker-audience knowledge base — Flow coaching, Denise's BFS library, call
+// transcripts, SOPs, blog, market/objection context. Returns the top source chunks for the bot
+// to synthesize ONCE (no second LLM pass), which keeps responses faster. Internal, team-token gated.
+async function flowKnowledge(input: Record<string, unknown>): Promise<string> {
+  const question = String(input.question || "").trim();
+  if (!question) return "Ask me something — e.g. 'how do we handle a self-employed file?' or 'what do clients say about renewals?'";
+
+  const base = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://jkeujqzlclrxhwamplby.supabase.co";
+  const apikey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  const team = process.env.ASK_FLOW_TEAM_TOKEN || "";
+  if (!team) return "Knowledge base isn't configured yet (missing team token).";
+
+  try {
+    const res = await fetch(`${base}/functions/v1/bfs-search`, {
+      method: "POST",
+      headers: { apikey, "x-team-token": team, "content-type": "application/json" },
+      body: JSON.stringify({ question, answer: false, match_count: 8 }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      return `Knowledge lookup unavailable (HTTP ${res.status}). ${t.slice(0, 160)}`;
+    }
+    const d = await res.json();
+    const sources = Array.isArray(d.sources) ? d.sources : [];
+    if (!sources.length) return "Nothing in the Flow knowledge base covers that yet.";
+    const blocks = sources
+      .map((s: Record<string, unknown>, i: number) => {
+        const label = String(s.title || s.type || `source ${i + 1}`);
+        return `[${label}]\n${String(s.text || "").trim()}`;
+      })
+      .join("\n\n");
+    return (
+      "Relevant Flow knowledge below. Synthesize a direct, practical answer for the teammate: " +
+      "lead with Flow's own approach where covered, fold in the call-transcript and BFS material for specifics, " +
+      "and treat any lender-specific numbers or rates as needing a current check.\n\n" + blocks
+    );
+  } catch (err) {
+    return `Knowledge lookup error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 

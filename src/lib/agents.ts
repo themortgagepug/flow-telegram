@@ -16,28 +16,32 @@ export async function getBrainContext(): Promise<string> {
   }
 
   try {
+    // Compact TOPIC INDEX only (no full content) -- keeps the prompt small and fast.
+    // The bot pulls full detail on demand via the query_brain and flow_knowledge tools.
     const { data, error } = await supabase
       .from("brain")
-      .select("category, topic, content")
+      .select("category, topic")
       .order("category");
 
     if (error || !data?.length) {
       return brainCache || "Brain data unavailable.";
     }
 
-    // Group by category for readability
+    // Group topics by category for a scannable index
     const grouped: Record<string, string[]> = {};
     for (const row of data) {
       const cat = String(row.category || "other").toUpperCase();
       if (!grouped[cat]) grouped[cat] = [];
-      grouped[cat].push(`${row.topic}: ${row.content}`);
+      if (row.topic) grouped[cat].push(String(row.topic));
     }
 
     const sections = Object.entries(grouped).map(
-      ([cat, entries]) => `## ${cat}\n${entries.join("\n\n")}`
+      ([cat, topics]) => `## ${cat}\n${topics.join(" • ")}`
     );
 
-    brainCache = sections.join("\n\n---\n\n");
+    brainCache =
+      "Topics in Flow's knowledge base (use query_brain or flow_knowledge to pull detail on any of these):\n\n" +
+      sections.join("\n");
     brainCacheTime = Date.now();
     return brainCache;
   } catch {
@@ -162,10 +166,11 @@ FORMATTING:
 - Amounts in CAD.
 - Show the ACTUAL data from tool results. Don't paraphrase or summarize away the details.
 
-ERRORS:
-- NEVER tell Alex to "check with James" or "talk to your IT team" or "configure environment variables."
-- If a Zoho call fails, say "Zoho connection issue" and retry once. If still failing, say so directly.
-- You are the ops team. Own the problem.
+ERRORS & HONESTY (hard rules):
+- You are the ops team. Own the problem. NEVER tell anyone to "check with James", "talk to IT", or "configure environment variables", and NEVER say you will "flag", "escalate", "notify", or "report" something to a person. You cannot contact anyone, so do not claim you will.
+- Never invent actions you can't take. You can only do what your tools actually do. Do not promise follow-ups, emails, or escalations that no tool performs.
+- If a tool errors or returns nothing useful, say so in one plain line, then TRY ANOTHER TOOL before giving up — for almost any knowledge, deal-history, call, or "what do we know about X" question, use flow_knowledge. Only say you don't have it after flow_knowledge also comes up empty.
+- Never fabricate an answer, a statistic, or a next step.
 
 TAKING ACTION IN ZOHO:
 You can DO things, not just read. When Alex says:
@@ -177,11 +182,12 @@ Always confirm what you're about to change BEFORE doing it. Show the action, get
 
 LEAD INTAKE:
 When you detect lead info, IMMEDIATELY:
-1. Show what you extracted
-2. Ask ONLY for missing required fields (email, purpose, referral source) in one grouped message
-3. Suggest smart defaults: "Timeline TBD, Deal Type TBD, Amy as AMA -- say 'go' if that works"
-4. On "go" or confirmation, call zoho_create_full_lead
-5. Confirm with Zoho links
+1. Show what you extracted in a tight bullet list so Alex can eyeball it.
+2. Required to create: first name, last name, email, purpose. Ask for ONLY the missing required ones, plus phone + referral source if not given (these decide follow-up and routing). Group every question into ONE message — never one at a time.
+3. Offer smart defaults so he can one-tap: "Defaults: Timeline TBD, Deal Type TBD, prefer Text, source Realtor. Reply 'go' to create or correct anything."
+4. On "go"/confirmation, call zoho_create_full_lead with EVERY field you have — the deal and the outreach task are only as good as what you pass.
+5. Confirm with the live Zoho deal + contact links, name who it's assigned to (Amy), and state the next step ("Amy has a same-day call task — want a welcome email drafted too?").
+Lead intake always lands the deal on the Leads layout at Stage "Lead Received", Owner Amy, PIC/MA Alex. Don't promise emails or calls a tool didn't actually perform.
 
 TOOLS YOU HAVE:
 
@@ -230,7 +236,7 @@ FLOW MORTGAGE - KEY CONTEXT:
 - Top lead sources: Realtors, referrals/repeat, Instagram
 - Team: Amy (AMA, Collecting Docs), James (Ops Mgr), Joana (Compliance), Erica (transitioning to ops, CX templates), Tina (Admin), Brody (Media)
 - CRM: Zoho (flowmortgageco). Mortgages = "Deals" in API. Contacts = "People" in merge fields.
-- Pipeline stages: Qualification > Pre-Approval > Submitted > Approved > Instructed > Funded > Complete
+- New leads start at Stage "Lead Received" on the Leads layout, owned by Amy, with Alex as PIC/MA. Live deals then move through Collecting Documentation, Submitted, Approved, Instructed, Funded. Never invent a stage name — use zoho_get_deal_details / zoho_pipeline_report to read the real one.
 - Every client gets a video when funded
 - Content positioning: "The Mortgage War Room" -- inside a high-volume brokerage
 - YouTube: 4,020 subs, target 20K by Dec 2026
@@ -275,7 +281,7 @@ You are the PIPELINE agent. You track deals and operations in Zoho CRM:
 - Team workload
 - Compliance tracking
 - Finmo sync status
-- LEAD INTAKE: When receiving new lead info (text, screenshot, voice transcription), extract ALL details and use zoho_create_full_lead. Before creating, show what you extracted and ask about missing REQUIRED fields (email, purpose, referral source). Group questions in one message. If user says "go" or similar, use defaults (Timeline: TBD, Deal Type: TBD, Communication: Text, App Preference: Online Link). Always auto-set: MA=Alex, AMA=Amy, Stage=Qualification.`,
+- LEAD INTAKE: When receiving new lead info (text, screenshot, voice transcription), extract ALL details and use zoho_create_full_lead. Before creating, show what you extracted and ask about missing REQUIRED fields (email, purpose) plus phone + referral source. Group questions in one message. If user says "go" or similar, use defaults (Timeline: TBD, Deal Type: TBD, Communication: Text, App Preference: Online Link). The tool auto-sets: Owner=Amy, PIC/MA=Alex, Loan Partner=Amy, Stage="Lead Received", on the Leads layout, and opens a same-day call task for Amy.`,
 
     content: `${base}
 

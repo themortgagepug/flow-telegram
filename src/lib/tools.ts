@@ -30,7 +30,7 @@ export const TOOLS = [
   {
     name: "zoho_create_full_lead",
     description:
-      "FULL lead intake: creates Contact + Mortgage Deal + assigns Amy as AMA + creates outreach task. Use this instead of zoho_create_lead when you have enough info for a proper mortgage lead. Mirrors the internal New Lead Form.",
+      "FULL lead intake, mirrors the internal New Lead Form. Creates the Contact, then a Mortgage deal on the Leads layout (Stage 'Lead Received', Owner Amy, PIC/MA Alex, Loan Partner Amy, Source 'New Lead Form', named 'FLOW - Last, First - Purpose'), then a same-day outreach task for Amy linked to the deal. Use this the moment you have the 4 required fields (first_name, last_name, email, purpose) — pass every other field you can extract so the deal and task are complete. Returns the live Zoho links.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -473,6 +473,23 @@ export const TOOLS = [
         },
       },
       required: ["query"],
+    },
+  },
+
+  // === FLOW KNOWLEDGE (semantic search over the whole internal brain) ===
+  {
+    name: "flow_knowledge",
+    description:
+      "Search Flow's full internal knowledge base and answer almost any team question from it. Covers: self-employed / Business-For-Self handling (Flow coaching + Denise Laframboise's BFS library); what was said and decided on past client and partner CALLS (1,700+ call transcripts); Flow's processes, SOPs, and playbooks; lender and product guidance; market, rate, and objection context; and Alex's own coaching and methods. Use this for 'how do we...', 'what do we know about...', 'what did we discuss/learn from calls about...', 'how should I handle...', or any self-employed/BFS question. Flow's own approach leads; other sources fill gaps. For a SPECIFIC named client's call history, call_intelligence can be more precise; for exact lender rules use flowiq_search.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        question: {
+          type: "string",
+          description: "The team member's question in plain language",
+        },
+      },
+      required: ["question"],
     },
   },
 
