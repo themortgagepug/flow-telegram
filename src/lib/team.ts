@@ -21,7 +21,9 @@ const ALLOWED_IDS: Record<number, TeamMember> = {
 
 // ADMIN OVERRIDE: First message from any user gets through during setup phase
 // Set this to false once team is registered
-const SETUP_MODE = true;
+// LOCKED 2026-07-02: bot is reachable again via long-polling; Alex is
+// registered by ID + username above, so open admin access must stay off.
+const SETUP_MODE = false;
 
 export function getTeamMember(userId: number, username?: string): TeamMember | null {
   // Check by numeric ID first (most reliable)
@@ -50,4 +52,33 @@ export function getTeamMember(userId: number, username?: string): TeamMember | n
 export function isAdmin(userId: number): boolean {
   const member = ALLOWED_IDS[userId];
   return member?.role === "admin";
+}
+
+// =====================================================================
+// TEAM BOT (@flowmortgagecoteambot) -- separate roster from the main/admin bot.
+// The main bot above stays Alex-only; the team bot is the staff-facing one.
+// Registration phase: TEAM_BOT_SETUP_MODE lets staff message it once so we can
+// capture their numeric IDs, then we fill TEAM_BOT_IDS and flip setup off to lock it.
+// =====================================================================
+const TEAM_AGENTS = ["pipeline", "cx", "general"];
+
+const TEAM_BOT_IDS: Record<number, TeamMember> = {
+  7544938550: { name: "Alex", role: "admin", agents: TEAM_AGENTS },
+  // Added after registration (collect IDs via the bot in setup mode):
+  // James, Lidia, Sckala, Erica, Amy, Leah  (Joana pending channel decision)
+};
+
+// Flip to false once the roster above is filled, to lock the team bot to staff only.
+const TEAM_BOT_SETUP_MODE = true;
+
+export function getTeamBotMember(userId: number, username?: string): TeamMember | null {
+  if (TEAM_BOT_IDS[userId]) return TEAM_BOT_IDS[userId];
+
+  if (TEAM_BOT_SETUP_MODE) {
+    console.log(`[TEAM SETUP] Unregistered team-bot user: ${username || "no_username"} (ID: ${userId})`);
+    return { name: username || `user_${userId}`, role: "team", agents: TEAM_AGENTS };
+  }
+
+  console.log(`[TEAM DENIED] Unauthorized team-bot user: ${username || "no_username"} (ID: ${userId})`);
+  return null;
 }
