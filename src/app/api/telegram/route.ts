@@ -7,6 +7,28 @@ import { handleMessage } from "@/lib/bot";
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 
+// Flow IQ memory spine: mirror every inbound message to flowiq_interactions
+// (fire-and-forget — the spine must never slow or break the bot).
+const FLOWIQ_LOG_URL = process.env.FLOWIQ_LOG_URL || "";
+const FLOWIQ_LOG_SECRET = process.env.FLOWIQ_LOG_SECRET || "";
+
+function logToSpine(message: Record<string, unknown>) {
+  if (!FLOWIQ_LOG_URL || !FLOWIQ_LOG_SECRET) return;
+  const from = message.from as Record<string, unknown> | undefined;
+  const text = typeof message.text === "string" ? message.text : "";
+  if (!text) return;
+  fetch(FLOWIQ_LOG_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-log-key": FLOWIQ_LOG_SECRET },
+    body: JSON.stringify({
+      surface: "telegram",
+      action: "message",
+      telegram_user_id: from?.id,
+      query: text,
+    }),
+  }).catch(() => {});
+}
+
 export async function POST(req: NextRequest) {
   console.log("[Route] POST received");
 
@@ -35,6 +57,7 @@ export async function POST(req: NextRequest) {
 
   const chatId = (message.chat as Record<string, unknown>)?.id as number;
   console.log(`[Route] Processing message from chat ${chatId}`);
+  logToSpine(message);
 
   try {
     await handleMessage(message as Parameters<typeof handleMessage>[0], TELEGRAM_BOT_TOKEN);
