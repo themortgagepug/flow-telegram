@@ -1,6 +1,6 @@
 import { sendMessage, sendTypingAction, getFileUrl, sendDocument } from "./telegram";
 import { runRenewalForDealId } from "./renewal/handler";
-import { getTeamMember } from "./team";
+import { getTeamMember, getTeamBotMember } from "./team";
 import {
   getPropertyContext,
   getCXContext,
@@ -11,6 +11,7 @@ import {
   getBrainContext,
 } from "./agents";
 import { handleToolCall } from "./tool-handlers";
+import { getAccountabilityMessage } from "./accountability";
 import { getHistory, addToHistory } from "./memory";
 import { chatWithClaude } from "./claude";
 import { logActivity, HELP_TEXT as LOG_HELP } from "./activity-log";
@@ -29,19 +30,44 @@ type TelegramMessage = {
   date: number;
 };
 
+// Team bot (@flowmortgagecoteambot) -- scoped to team-appropriate tools only.
+// Deliberately excludes admin/personal tools: CEO + revenue dashboards, partner
+// intelligence, content generation (short-form/hooks), property hub, outbound email,
+// calendar, daily briefing, pre-approval letters, partner-call processing.
+const TEAM_TOOL_BASENAMES = [
+  "zoho_create_lead",
+  "zoho_create_full_lead",
+  "zoho_search_contacts",
+  "zoho_create_task",
+  "zoho_update_deal",
+  "zoho_get_deal_details",
+  "zoho_pipeline_report",
+  "zoho_recent_activity",
+  "query_brain",
+  "flow_knowledge",
+  "mortgage_calculator",
+  "flowiq_search",
+  "call_intelligence",
+];
+
+// Slash commands the team bot is allowed to run (others bypass tool gating, so block them).
+const TEAM_ALLOWED_COMMANDS = new Set(["/start", "/help", "/lead", "/calc", "/log", "/renewal"]);
+
+export type HandleOpts = { teamBot?: boolean };
+
 // Track which agent each user is currently talking to
 const userAgents: Record<number, string> = {};
 // Track pending confirmations (e.g., "send it" to confirm an email)
 const pendingActions: Record<number, { tool: string; input: Record<string, unknown> }> = {};
 
-export async function handleMessage(message: TelegramMessage, token: string) {
+export async function handleMessage(message: TelegramMessage, token: string, opts: HandleOpts = {}) {
   const chatId = message.chat.id;
   const userId = message.from.id;
   const text = message.text?.trim() || "";
   const username = message.from.username;
 
-  // Check team access
-  const member = getTeamMember(userId, username);
+  // Check access -- team bot uses its own roster, main bot uses the admin roster.
+  const member = opts.teamBot ? getTeamBotMember(userId, username) : getTeamMember(userId, username);
   if (!member) {
     await sendMessage(token, chatId, "Access denied. Contact Alex to get added.");
     return;
@@ -67,7 +93,7 @@ export async function handleMessage(message: TelegramMessage, token: string) {
 
   // Handle commands
   if (text.startsWith("/")) {
-    const handled = await handleCommand(text, message, token, chatId, userId);
+    const handled = await handleCommand(text, message, token, chatId, userId, opts.teamBot);
     if (handled) return;
   }
 
@@ -132,7 +158,7 @@ export async function handleMessage(message: TelegramMessage, token: string) {
 
   let context = "";
   try {
-    const [agentContext, brainContext] = await Promise.all([
+    const [agentContext, brainContext, iqMemory] = await Promise.all([
       (async () => {
         switch (agent) {
           case "property": return await getPropertyContext();
@@ -144,8 +170,13 @@ export async function handleMessage(message: TelegramMessage, token: string) {
         }
       })(),
       getBrainContext(),
+      getFlowIqMemory(userId),
     ]);
-    context = (agentContext ? `AGENT CONTEXT:\n${agentContext}\n\n` : "") +
+    if (iqMemory) console.log(`[Bot] Flow IQ memory attached (${iqMemory.length} chars)`);
+    context = (iqMemory
+      ? `BROKER MEMORY — Flow IQ already knows this about the CURRENT USER from their activity across the hub, chat, and Telegram. When they ask about themselves, their habits, or team knowledge, ANSWER DIRECTLY FROM THESE LINES — no tool call needed. Do not treat these as facts about a specific deal unless the user says so.\n${iqMemory}\n\n`
+      : "") +
+      (agentContext ? `AGENT CONTEXT:\n${agentContext}\n\n` : "") +
       `FLOW KNOWLEDGE BASE:\n${brainContext}`;
   } catch (e) {
     console.error("Context fetch error:", e);
@@ -165,6 +196,7 @@ export async function handleMessage(message: TelegramMessage, token: string) {
       userMessage,
       imagePath,
       history: history.map((h) => ({ role: h.role, content: h.content })),
+      allowedToolNames: opts.teamBot ? TEAM_TOOL_BASENAMES : undefined,
     });
 
     clearInterval(typingInterval);
@@ -183,8 +215,56 @@ export async function handleMessage(message: TelegramMessage, token: string) {
   }
 }
 
-async function handleCommand(text: string, message: TelegramMessage, token: string, chatId: number, userId: number): Promise<boolean> {
+// Flow IQ spine read-back: cross-surface memory about this sender (confirmed
+// facts + recent activity). Fail-soft with a hard timeout — a spine hiccup
+// must never slow the bot's reply.
+async function getFlowIqMemory(userId: number): Promise<string> {
+  const url = process.env.FLOWIQ_LOG_URL || "";
+  const secret = process.env.FLOWIQ_LOG_SECRET || "";
+  if (!url || !secret) return "";
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-log-key": secret },
+      body: JSON.stringify({ action: "context", telegram_user_id: userId }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return "";
+    const j = (await res.json()) as { context?: string };
+    return j.context || "";
+  } catch {
+    return "";
+  }
+}
+
+async function handleCommand(text: string, message: TelegramMessage, token: string, chatId: number, userId: number, teamBot = false): Promise<boolean> {
   const command = text.split(" ")[0].toLowerCase().replace(/@\w+/, "");
+
+  // Team bot: block admin/personal commands (they call tools directly, bypassing the tool gate).
+  if (teamBot && !TEAM_ALLOWED_COMMANDS.has(command)) {
+    await sendMessage(token, chatId, "That command isn't on the team bot. Try /lead, /calc, /log, or just ask me a question.");
+    return true;
+  }
+
+  // Team bot gets its own /start (scoped capabilities + captures their ID for registration).
+  if (teamBot && command === "/start") {
+    await sendMessage(token, chatId,
+      `Hey ${message.from.first_name}. This is Flow Team IQ.
+
+/lead -- Send lead info (type, forward, screenshot, or voice). I create the contact + mortgage and task Amy.
+/calc -- Canadian mortgage math. "What can someone afford on 120k?"
+/log -- Log an activity to the Sales scoreboard.
+
+Or just ask me:
+- How to handle a self-employed / Business-For-Self file
+- Lender/program questions (FlowIQ)
+- A client's deal status, or update a deal
+- Any Flow process or SOP
+
+Your Telegram ID: ${userId}`
+    );
+    return true;
+  }
 
   switch (command) {
     case "/start":
@@ -241,6 +321,11 @@ Send screenshots, voice notes, or text with lead info. I'll extract details, ask
       await sendTypingAction(token, chatId);
       const result = await handleToolCall("get_daily_briefing", { detail_level: "full" });
       await sendMessage(token, chatId, result);
+      return true;
+
+    case "/accountability":
+      await sendTypingAction(token, chatId);
+      await sendMessage(token, chatId, await getAccountabilityMessage());
       return true;
 
     case "/property":
