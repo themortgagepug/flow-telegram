@@ -3,9 +3,10 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+// Server-side: service key so chat_history writes aren't blocked by row-level security.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://jkeujqzlclrxhwamplby.supabase.co",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+  process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 );
 
 type ChatMessage = {

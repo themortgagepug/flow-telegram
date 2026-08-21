@@ -898,7 +898,16 @@ async function zohoGetDealDetails(input: Record<string, unknown>): Promise<strin
     if (d.Pipeline) lines.push(`Pipeline: ${d.Pipeline}`);
     if (d.Lender_Name) lines.push(`Lender: ${d.Lender_Name}`);
     if (d.Mortgage_Rate) lines.push(`Rate: ${d.Mortgage_Rate}%`);
-    if (d.Amortization_Years) lines.push(`Amortization: ${d.Amortization_Years} years`);
+    // Amortization_Years holds YEARS (standard 2026-08-06). Legacy rows may still
+    // hold months; Canadian amortization caps at 40 years, so anything above that
+    // is months that predates the migration.
+    if (d.Amortization_Years) {
+      const rawAmort = Number(d.Amortization_Years);
+      const amort = Number.isFinite(rawAmort) && rawAmort > 40
+        ? Math.round(rawAmort / 12)
+        : rawAmort;
+      lines.push(`Amortization: ${amort} years`);
+    }
     if (d.Mortgage_Type) lines.push(`Type: ${d.Mortgage_Type}`);
     if (d.Deal_Type) lines.push(`Deal Type: ${d.Deal_Type}`);
     if (d.High_Ratio_Insurable_Uninsurable) lines.push(`Insurance: ${d.High_Ratio_Insurable_Uninsurable}`);
