@@ -21,6 +21,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Not configured" }, { status: 500 });
   }
 
+  // No unsolicited Telegram. Alex, 2026-08-09: "I dont need any more
+  // telegrams." FLOW_ALERTS_TELEGRAM=off was set that day in creds.env and
+  // .env.local, and every shell sender honours it, but this app read the flag
+  // nowhere, so this cron kept pushing a raw three-tool dump every weekday at
+  // 07:00 PT for months. The schedule is now removed from vercel.json; this
+  // guard is the second lock so re-adding a schedule alone cannot restart it.
+  // The same content is still available on demand: send /briefing to the bot.
+  if ((process.env.FLOW_ALERTS_TELEGRAM || "off").toLowerCase() !== "on") {
+    return NextResponse.json({ ok: true, sent: false, reason: "outbound_telegram_disabled" });
+  }
+
   try {
     // Fetch pipeline + revenue in parallel
     const [pipelineResult, revenueResult, partnerResult] = await Promise.all([
