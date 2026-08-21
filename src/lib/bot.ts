@@ -12,6 +12,7 @@ import {
 } from "./agents";
 import { handleToolCall } from "./tool-handlers";
 import { getAccountabilityMessage } from "./accountability";
+import { handleDecisionReply, openDecision } from "./approvals";
 import { getHistory, addToHistory } from "./memory";
 import { chatWithClaude } from "./claude";
 import { logActivity, HELP_TEXT as LOG_HELP } from "./activity-log";
@@ -75,6 +76,17 @@ export async function handleMessage(message: TelegramMessage, token: string, opt
 
   // Show typing indicator
   await sendTypingAction(token, chatId);
+
+  // A "yes" or "no" answering a decision we pushed settles it here, before the
+  // generic confirm flow or the chat model sees it. Returns null when the
+  // message is not an answer, so normal conversation is untouched.
+  if (!pendingActions[userId]) {
+    const settled = await handleDecisionReply(text, member.name || String(userId));
+    if (settled) {
+      await sendMessage(token, chatId, settled);
+      return;
+    }
+  }
 
   // Handle confirmation replies
   if (pendingActions[userId] && /^(send it|confirm|yes|do it|approved|go ahead)/i.test(text)) {
@@ -283,7 +295,7 @@ Your Telegram ID: ${userId}`
 
 /pipeline -- Full pipeline by stage.
 
-/briefing -- Everything across all systems.
+/decisions -- What is waiting on a yes or no from you.\n/briefing -- Everything across all systems.
 
 Or just talk to me. I know the whole team, every process, every SOP.
 
@@ -316,6 +328,15 @@ Actions:
 Send screenshots, voice notes, or text with lead info. I'll extract details, ask about what's missing, create the contact + mortgage, and task Amy to reach out.`
       );
       return true;
+
+    case "/decisions": {
+      // Pull, so he is never dependent on a push arriving.
+      const d = await openDecision();
+      await sendMessage(token, chatId, d
+        ? `<b>${d.subject}</b>\nFrom ${d.source_agent}.\n\nReply <b>yes</b> to approve or <b>no</b> to decline.`
+        : "Nothing is waiting on a decision from you.");
+      return true;
+    }
 
     case "/briefing":
       await sendTypingAction(token, chatId);
